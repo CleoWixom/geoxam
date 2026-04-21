@@ -104,7 +104,7 @@ function startApp(): void {
   router.on('/gallery/:folderId', async ({ folderId }) => {
     setActiveNav('gallery')
     const { FolderView } = await loadGallery()
-    mountScreen(screenEl, new FolderView(Number(folderId)))
+    mountScreen(screenEl, new FolderView(folderId))
   })
 
   router.on('/photo/:id', async ({ id }) => {

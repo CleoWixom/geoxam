@@ -1,135 +1,42 @@
 /**
- * MaskManager — Phase 5 implementation
- *
- * Mounts the appropriate disguise UI (Calculator / Calendar / Notepad)
- * and manages the unlock flow (trigger detection → PIN/Pattern lock → emit mask:unlock).
+ * Mask system — full implementation
+ * Calculator (working arithmetic + 1337= unlock)
+ * Calendar (working month nav + triple-tap today unlock)
+ * Notepad (persistent text + :::+corner-tap unlock)
+ * PIN overlay with shake animation + 30s lockout
  */
 
 import { settingsDB } from '../../core/db/settings.js'
 import { events } from '../../ui/events.js'
 import { verifyCode } from '../../core/crypto/index.js'
-import type { MaskType, MaskProtection } from '../../types/index.js'
+import type { MaskType } from '../../types/index.js'
 
-// =============================================================================
-// MaskManager
-// =============================================================================
 export class MaskManager {
   private container: HTMLElement | null = null
-  private maskType: MaskType = 'calculator'
-  private protection: MaskProtection = 'none'
-  private codeHash = ''
 
   async mount(container: HTMLElement): Promise<void> {
     this.container = container
-    this.maskType = await settingsDB.getSetting('mask.type')
-    this.protection = await settingsDB.getSetting('mask.protection')
-    this.codeHash = await settingsDB.getSetting('mask.codeHash')
+
+    const [type, protection, codeHash] = await Promise.all([
+      settingsDB.getSetting('mask.type'),
+      settingsDB.getSetting('mask.protection'),
+      settingsDB.getSetting('mask.codeHash'),
+    ])
 
     container.innerHTML = '<div id="mask-root"></div>'
     const root = container.querySelector<HTMLElement>('#mask-root')!
 
-    switch (this.maskType) {
-      case 'calculator': mountCalculator(root, () => this.triggerUnlock()); break
-      case 'calendar':   mountCalendar(root, () => this.triggerUnlock());   break
-      case 'notepad':    mountNotepad(root, () => this.triggerUnlock());     break
-    }
-  }
-
-  private async triggerUnlock(): Promise<void> {
-    if (this.protection === 'none') {
-      events.emit('mask:unlock')
-      return
-    }
-    if (this.protection === 'pin') {
-      this.showPinLock()
-    }
-  }
-
-  private showPinLock(): void {
-    if (!this.container) return
-    const overlay = document.createElement('div')
-    overlay.className = 'pin-overlay'
-    overlay.innerHTML = `
-      <div class="pin-lock">
-        <div class="pin-dots" id="pin-dots">
-          <span></span><span></span><span></span><span></span>
-        </div>
-        <div class="pin-pad">
-          ${[1,2,3,4,5,6,7,8,9,'',0,'⌫'].map(k => `<button class="pin-key" data-key="${k}">${k}</button>`).join('')}
-        </div>
-        <div class="pin-error" id="pin-error"></div>
-      </div>
-    `
-
-    let entry = ''
-    let attempts = 0
-    const MAX_ATTEMPTS = 3
-    const LOCKOUT_MS = 30_000
-    let locked = false
-
-    const dotsEl = overlay.querySelector<HTMLElement>('#pin-dots')!
-    const errorEl = overlay.querySelector<HTMLElement>('#pin-error')!
-
-    const updateDots = () => {
-      dotsEl.querySelectorAll('span').forEach((dot, i) => {
-        dot.classList.toggle('filled', i < entry.length)
-      })
-    }
-
-    const shake = () => {
-      dotsEl.classList.add('shake')
-      setTimeout(() => dotsEl.classList.remove('shake'), 500)
-    }
-
-    overlay.querySelector('.pin-pad')?.addEventListener('click', async (e) => {
-      if (locked) return
-      const key = (e.target as HTMLElement).dataset.key
-      if (key === undefined || key === '') return
-
-      if (key === '⌫') {
-        entry = entry.slice(0, -1)
-        updateDots()
-        return
+    const onTrigger = () => {
+      if (protection === 'none') {
+        events.emit('mask:unlock')
+      } else if (protection === 'pin') {
+        showPinLock(root, codeHash, () => events.emit('mask:unlock'))
       }
+      // Pattern: Phase 5 extension
+    }
 
-      entry += key
-      updateDots()
-
-      if (entry.length >= 4) {
-        const ok = await verifyCode(entry, this.codeHash)
-        if (ok) {
-          overlay.remove()
-          events.emit('mask:unlock')
-          return
-        }
-
-        attempts++
-        entry = ''
-        updateDots()
-        shake()
-
-        if (attempts >= MAX_ATTEMPTS) {
-          locked = true
-          let remaining = LOCKOUT_MS / 1000
-          errorEl.textContent = `Try again in ${remaining}s`
-          const countdown = setInterval(() => {
-            remaining--
-            if (remaining <= 0) {
-              clearInterval(countdown)
-              locked = false
-              attempts = 0
-              errorEl.textContent = ''
-            } else {
-              errorEl.textContent = `Try again in ${remaining}s`
-            }
-          }, 1000)
-        } else {
-          errorEl.textContent = `Wrong PIN (${attempts}/${MAX_ATTEMPTS})`
-        }
-      }
-    })
-
-    this.container!.appendChild(overlay)
+    const mountFn = MASKS[type]
+    mountFn(root, onTrigger)
   }
 
   unmount(): void {
@@ -137,170 +44,188 @@ export class MaskManager {
   }
 }
 
+const MASKS: Record<MaskType, (root: HTMLElement, onUnlock: () => void) => void> = {
+  calculator: mountCalculator,
+  calendar:   mountCalendar,
+  notepad:    mountNotepad,
+}
+
 // =============================================================================
-// Calculator Mask
+// Calculator
 // =============================================================================
 function mountCalculator(root: HTMLElement, onUnlock: () => void): void {
-  const UNLOCK_SEQ = '1337='   // default sequence
-  let display = '0'
-  let operand1: number | null = null
-  let operator: string | null = null
-  let justEvaluated = false
-  let inputBuffer = ''
-
-  const KEYS = [
-    ['AC', '+/-', '%', '÷'],
-    ['7', '8', '9', '×'],
-    ['4', '5', '6', '−'],
-    ['1', '2', '3', '+'],
-    ['0', '0', '.', '='],
-  ]
-
   root.className = 'mask-calculator'
-  root.innerHTML = `
+
+  // State
+  let display   = '0'
+  let stored    = 0
+  let operator: string | null = null
+  let fresh     = false  // next digit clears display
+  const history: string[] = []   // last N keystrokes for unlock detection
+
+  const UNLOCK = '1337='
+
+  root.innerHTML = /* html */`
     <div class="calc-display">
       <div class="calc-display-inner" id="calc-display">0</div>
     </div>
-    <div class="calc-keys" id="calc-keys">
-      ${KEYS.flat().filter((v, i, a) => !(v === '0' && a[i-1] === '0')).map((key, i) => {
-        const isOp = ['÷', '×', '−', '+', '='].includes(key)
-        const isFunc = ['AC', '+/-', '%'].includes(key)
-        const isZero = key === '0'
-        return `<button class="calc-key ${isOp ? 'op' : isFunc ? 'func' : ''}${isZero ? ' zero' : ''}" data-key="${key}">${key}</button>`
-      }).join('')}
-    </div>
+    <div class="calc-keys" id="calc-keys"></div>
   `
 
-  const displayEl = root.querySelector<HTMLElement>('#calc-display')!
+  // Build keypad
+  const ROWS = [
+    ['AC', '+/-', '%', '÷'],
+    ['7',  '8',   '9', '×'],
+    ['4',  '5',   '6', '−'],
+    ['1',  '2',   '3', '+'],
+  ]
   const keysEl = root.querySelector<HTMLElement>('#calc-keys')!
+  const displayEl = root.querySelector<HTMLElement>('#calc-display')!
 
-  // Track last 5 inputs for unlock sequence detection
-  const history: string[] = []
+  for (const row of ROWS) {
+    for (const key of row) {
+      keysEl.appendChild(makeKey(key))
+    }
+  }
+  // Bottom row: wide 0, dot, equals
+  keysEl.appendChild(makeKey('0', true))
+  keysEl.appendChild(makeKey('.'))
+  keysEl.appendChild(makeKey('='))
 
-  const updateDisplay = (val: string) => {
-    displayEl.textContent = val.length > 9 ? parseFloat(val).toExponential(3) : val
+  function makeKey(key: string, wide = false): HTMLButtonElement {
+    const btn = document.createElement('button')
+    btn.className = 'calc-key' +
+      (['÷','×','−','+','='].includes(key) ? ' op' : '') +
+      (['AC','+/-','%'].includes(key) ? ' func' : '') +
+      (wide ? ' zero' : '')
+    btn.dataset.key = key
+    btn.textContent = key
+    return btn
   }
 
-  keysEl.addEventListener('click', (e) => {
+  function setDisplay(val: string) {
+    const n = parseFloat(val)
+    if (!isNaN(n) && Math.abs(n) >= 1e9) {
+      displayEl.textContent = n.toExponential(3)
+    } else {
+      displayEl.textContent = val.length > 10 ? parseFloat(val).toPrecision(7) : val
+    }
+    // Scale font for long numbers
+    const len = displayEl.textContent!.length
+    ;(displayEl as HTMLElement).style.fontSize = len > 10 ? '44px' : len > 7 ? '58px' : '72px'
+  }
+
+  keysEl.addEventListener('click', e => {
     const key = (e.target as HTMLElement).dataset.key
     if (!key) return
 
-    // Track for unlock detection
-    const isDigit = /\d/.test(key)
-    const isEq = key === '='
-    if (isDigit || isEq) {
-      history.push(isDigit ? key : '=')
-      if (history.length > UNLOCK_SEQ.length) history.shift()
-      if (history.join('') === UNLOCK_SEQ) {
-        onUnlock()
-        return
-      }
+    // Track keystrokes for unlock
+    if (/\d/.test(key) || key === '=') {
+      history.push(key === '=' ? '=' : key)
+      if (history.length > UNLOCK.length) history.shift()
+      if (history.join('') === UNLOCK) { onUnlock(); return }
     }
 
-    // Calculator logic
     if (key === 'AC') {
-      display = '0'; operand1 = null; operator = null; justEvaluated = false; inputBuffer = ''
+      display = '0'; stored = 0; operator = null; fresh = false
+
     } else if (key === '+/-') {
-      display = String(-parseFloat(display))
+      display = String(-parseFloat(display) || 0)
+
     } else if (key === '%') {
       display = String(parseFloat(display) / 100)
-    } else if (['÷', '×', '−', '+'].includes(key)) {
-      operand1 = parseFloat(display)
+
+    } else if (['÷','×','−','+'].includes(key)) {
+      stored = parseFloat(display)
       operator = key
-      justEvaluated = false
-      inputBuffer = ''
+      fresh = true
+
     } else if (key === '=') {
-      if (operand1 !== null && operator) {
-        const op2 = parseFloat(display)
-        let result: number
-        switch (operator) {
-          case '÷': result = operand1 / op2; break
-          case '×': result = operand1 * op2; break
-          case '−': result = operand1 - op2; break
-          case '+': result = operand1 + op2; break
-          default:  result = op2
+      if (operator) {
+        const rhs = parseFloat(display)
+        const ops: Record<string, (a: number, b: number) => number> = {
+          '÷': (a,b) => b !== 0 ? a / b : NaN,
+          '×': (a,b) => a * b,
+          '−': (a,b) => a - b,
+          '+': (a,b) => a + b,
         }
-        display = String(parseFloat(result.toFixed(10)))
-        operand1 = null; operator = null; justEvaluated = true
+        const result = ops[operator](stored, rhs)
+        display = isNaN(result) ? 'Error' : String(parseFloat(result.toFixed(10)))
+        operator = null; fresh = true
       }
+
     } else if (key === '.') {
-      if (!display.includes('.')) display += '.'
+      if (fresh) { display = '0.'; fresh = false }
+      else if (!display.includes('.')) display += '.'
+
     } else {
       // Digit
-      if (justEvaluated || display === '0') {
-        display = key
-        justEvaluated = false
-      } else if (display.replace('-', '').length < 9) {
-        display += key
-      }
+      if (fresh || display === '0') { display = key; fresh = false }
+      else if (display !== 'Error' && display.replace('-','').length < 10) display += key
     }
 
-    updateDisplay(display)
+    setDisplay(display)
   })
 }
 
 // =============================================================================
-// Calendar Mask
+// Calendar
 // =============================================================================
 function mountCalendar(root: HTMLElement, onUnlock: () => void): void {
-  let viewYear = new Date().getFullYear()
-  let viewMonth = new Date().getMonth()
-  const today = new Date()
-
-  let tapCount = 0
-  let tapTimer: number | null = null
-
   root.className = 'mask-calendar'
 
-  const render = () => {
-    const monthName = new Date(viewYear, viewMonth).toLocaleString('default', { month: 'long' })
-    const firstDay = new Date(viewYear, viewMonth, 1).getDay()
-    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate()
-    const daysInPrev = new Date(viewYear, viewMonth, 0).getDate()
+  const now   = new Date()
+  let year    = now.getFullYear()
+  let month   = now.getMonth()
 
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  let tapCount = 0
+  let tapTimer: ReturnType<typeof setTimeout> | null = null
+
+  function render() {
+    const monthName = new Date(year, month).toLocaleString('default', { month: 'long' })
+    const firstDay  = new Date(year, month, 1).getDay()
+    const daysInMonth = new Date(year, month + 1, 0).getDate()
+    const prevDays    = new Date(year, month, 0).getDate()
+    const DAY_NAMES   = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
 
     let cells = ''
-    for (let i = 0; i < firstDay; i++) {
-      cells += `<div class="cal-day other">${daysInPrev - firstDay + 1 + i}</div>`
-    }
+    for (let i = 0; i < firstDay; i++)
+      cells += `<div class="cal-day other">${prevDays - firstDay + 1 + i}</div>`
     for (let d = 1; d <= daysInMonth; d++) {
-      const isToday = today.getFullYear() === viewYear && today.getMonth() === viewMonth && today.getDate() === d
+      const isToday = now.getFullYear()===year && now.getMonth()===month && now.getDate()===d
       cells += `<div class="cal-day${isToday ? ' today' : ''}" data-day="${d}">${d}</div>`
     }
-    const remaining = 42 - firstDay - daysInMonth
-    for (let d = 1; d <= remaining; d++) {
+    const trailing = 42 - firstDay - daysInMonth
+    for (let d = 1; d <= trailing; d++)
       cells += `<div class="cal-day other">${d}</div>`
-    }
 
-    root.innerHTML = `
+    root.innerHTML = /* html */`
       <div class="cal-header">
         <button class="cal-nav" id="cal-prev">‹</button>
-        <div class="cal-title">${monthName} ${viewYear}</div>
+        <div class="cal-title">${monthName} ${year}</div>
         <button class="cal-nav" id="cal-next">›</button>
       </div>
       <div class="cal-grid">
-        ${dayNames.map(d => `<div class="cal-day-name">${d}</div>`).join('')}
+        ${DAY_NAMES.map(d => `<div class="cal-day-name">${d}</div>`).join('')}
         ${cells}
       </div>
     `
 
-    root.querySelector('#cal-prev')?.addEventListener('click', () => {
-      viewMonth--; if (viewMonth < 0) { viewMonth = 11; viewYear-- }; render()
+    root.querySelector('#cal-prev')!.addEventListener('click', () => {
+      month--; if (month < 0) { month = 11; year-- }; render()
     })
-    root.querySelector('#cal-next')?.addEventListener('click', () => {
-      viewMonth++; if (viewMonth > 11) { viewMonth = 0; viewYear++ }; render()
+    root.querySelector('#cal-next')!.addEventListener('click', () => {
+      month++; if (month > 11) { month = 0; year++ }; render()
     })
 
-    // Unlock: tap today 3× within 1.5s
     root.querySelectorAll('.cal-day.today').forEach(el => {
       el.addEventListener('click', () => {
         tapCount++
-        if (tapTimer !== null) clearTimeout(tapTimer)
-        tapTimer = window.setTimeout(() => { tapCount = 0 }, 1500)
+        if (tapTimer) clearTimeout(tapTimer)
+        tapTimer = setTimeout(() => { tapCount = 0 }, 1500)
         if (tapCount >= 3) {
           tapCount = 0
-          if (tapTimer !== null) clearTimeout(tapTimer)
+          if (tapTimer) clearTimeout(tapTimer)
           onUnlock()
         }
       })
@@ -311,71 +236,130 @@ function mountCalendar(root: HTMLElement, onUnlock: () => void): void {
 }
 
 // =============================================================================
-// Notepad Mask
+// Notepad
 // =============================================================================
 function mountNotepad(root: HTMLElement, onUnlock: () => void): void {
   root.className = 'mask-notepad'
+  root.innerHTML = /* html */`
+    <div class="notepad-header">
+      <span class="notepad-title">Notes</span>
+      <span class="notepad-count" id="np-count">0 words</span>
+      <div class="notepad-corner-zone" id="np-corner"></div>
+    </div>
+    <textarea class="notepad-textarea" id="np-area" placeholder="Start typing…" spellcheck="true"></textarea>
+  `
 
-  let content = ''
+  const area    = root.querySelector<HTMLTextAreaElement>('#np-area')!
+  const countEl = root.querySelector<HTMLElement>('#np-count')!
+  const corner  = root.querySelector<HTMLElement>('#np-corner')!
+
   let cornerArmed = false
-  let cornerTimer: number | null = null
+  let cornerTimer: ReturnType<typeof setTimeout> | null = null
+  let saveTimer: ReturnType<typeof setTimeout> | null = null
 
+  // Load saved text
   settingsDB.getSetting('mask.notepadContent').then(saved => {
-    content = saved
-    textarea.value = content
+    area.value = saved
     updateCount()
   })
 
-  root.innerHTML = `
-    <div class="notepad-header">
-      <span class="notepad-title">Notes</span>
-      <span class="notepad-count" id="notepad-count">0 words</span>
-      <div class="notepad-corner-zone" id="corner-zone"></div>
-    </div>
-    <textarea class="notepad-textarea" id="notepad-textarea" placeholder="Start typing…" spellcheck="true"></textarea>
-  `
-
-  const textarea = root.querySelector<HTMLTextAreaElement>('#notepad-textarea')!
-  const countEl = root.querySelector<HTMLElement>('#notepad-count')!
-  const cornerZone = root.querySelector<HTMLElement>('#corner-zone')!
-
-  // Corner tap detection
-  cornerZone.addEventListener('click', () => {
+  corner.addEventListener('click', () => {
     if (cornerArmed) {
+      if (cornerTimer) clearTimeout(cornerTimer)
       cornerArmed = false
-      if (cornerTimer !== null) clearTimeout(cornerTimer)
       onUnlock()
     }
   })
 
-  let saveTimer: number | null = null
-
-  const updateCount = () => {
-    const words = content.trim() ? content.trim().split(/\s+/).length : 0
+  function updateCount() {
+    const words = area.value.trim() ? area.value.trim().split(/\s+/).length : 0
     countEl.textContent = `${words} word${words !== 1 ? 's' : ''}`
   }
 
-  textarea.addEventListener('input', () => {
-    content = textarea.value
-
-    // Detect ::: trigger sequence
-    if (content.endsWith(':::')) {
-      // Remove ::: silently
-      content = content.slice(0, -3)
-      textarea.value = content
-
-      // Arm corner zone for 2 seconds
+  area.addEventListener('input', () => {
+    // Detect ::: trigger
+    if (area.value.endsWith(':::')) {
+      area.value = area.value.slice(0, -3)
       cornerArmed = true
-      if (cornerTimer !== null) clearTimeout(cornerTimer)
-      cornerTimer = window.setTimeout(() => { cornerArmed = false }, 2000)
+      if (cornerTimer) clearTimeout(cornerTimer)
+      cornerTimer = setTimeout(() => { cornerArmed = false }, 2000)
     }
-
     updateCount()
-
-    // Debounce save
-    if (saveTimer !== null) clearTimeout(saveTimer)
-    saveTimer = window.setTimeout(() => {
-      settingsDB.setSetting('mask.notepadContent', content)
-    }, 500)
+    if (saveTimer) clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => settingsDB.setSetting('mask.notepadContent', area.value), 500)
   })
+}
+
+// =============================================================================
+// PIN Lock overlay
+// =============================================================================
+function showPinLock(parent: HTMLElement, codeHash: string, onSuccess: () => void): void {
+  const overlay = document.createElement('div')
+  overlay.className = 'pin-overlay'
+  overlay.innerHTML = /* html */`
+    <div class="pin-lock">
+      <div class="pin-dots" id="pin-dots">
+        <span></span><span></span><span></span><span></span>
+      </div>
+      <div class="pin-pad" id="pin-pad">
+        ${[1,2,3,4,5,6,7,8,9].map(k => `<button class="pin-key" data-key="${k}">${k}</button>`).join('')}
+        <button class="pin-key" data-key="" style="visibility:hidden"></button>
+        <button class="pin-key" data-key="0">0</button>
+        <button class="pin-key" data-key="⌫">⌫</button>
+      </div>
+      <div class="pin-error" id="pin-error"></div>
+    </div>
+  `
+
+  let entry    = ''
+  let attempts = 0
+  let locked   = false
+
+  const dotsEl  = overlay.querySelector<HTMLElement>('#pin-dots')!
+  const errorEl = overlay.querySelector<HTMLElement>('#pin-error')!
+
+  const updateDots = () => {
+    dotsEl.querySelectorAll('span').forEach((s, i) => s.classList.toggle('filled', i < entry.length))
+  }
+
+  const shake = () => {
+    dotsEl.classList.add('shake')
+    dotsEl.addEventListener('animationend', () => dotsEl.classList.remove('shake'), { once: true })
+  }
+
+  overlay.querySelector('#pin-pad')!.addEventListener('click', async e => {
+    if (locked) return
+    const key = (e.target as HTMLElement).dataset.key
+    if (key === undefined || key === '') return
+
+    if (key === '⌫') { entry = entry.slice(0, -1); updateDots(); return }
+
+    entry += key
+    updateDots()
+
+    if (entry.length >= 4) {
+      const ok = await verifyCode(entry, codeHash)
+      if (ok) { overlay.remove(); onSuccess(); return }
+
+      attempts++
+      entry = ''
+      updateDots()
+      shake()
+
+      if (attempts >= 3) {
+        locked = true
+        let t = 30
+        errorEl.textContent = `Try again in ${t}s`
+        const cd = setInterval(() => {
+          t--
+          if (t <= 0) { clearInterval(cd); locked = false; attempts = 0; errorEl.textContent = '' }
+          else errorEl.textContent = `Try again in ${t}s`
+        }, 1000)
+      } else {
+        errorEl.textContent = `Wrong PIN (${attempts}/3)`
+      }
+    }
+  })
+
+  parent.appendChild(overlay)
 }

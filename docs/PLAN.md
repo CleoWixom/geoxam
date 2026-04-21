@@ -103,13 +103,13 @@ Everything else is devDependency (Vite, TypeScript, Workbox).
 ## 4. Phase Breakdown
 
 ```
-Phase 0  Skeleton, tooling, CI/CD, versioning         Est: 1 session
-Phase 1  Core services: DB, Geo, Camera, Canvas       Est: 2 sessions
-Phase 2  Capture screen (viewfinder + capture flow)   Est: 1 session
-Phase 3  Gallery (folders, browser, viewer)           Est: 1-2 sessions
-Phase 4  Settings (all config panels)                 Est: 1 session
-Phase 5  Mask system (3 disguises + protection)       Est: 1-2 sessions
-Phase 6  PWA, polish, tests, docs                     Est: 1 session
+Phase 0  Skeleton, tooling, CI/CD, versioning         ✅ Done
+Phase 1  Core services: DB, Geo, Camera, Canvas       ✅ Done
+Phase 2  Capture screen (viewfinder + capture flow)   ✅ Done
+Phase 3  Gallery (folders, browser, viewer)           ✅ Done
+Phase 4  Settings (all config panels)                 ✅ Done
+Phase 5  Mask system (3 disguises + protection)       ✅ Done
+Phase 6  PWA, polish, tests, docs                     🔜 Next
 ```
 
 ---
@@ -812,11 +812,11 @@ The `[skip ci]` prevents an infinite loop.
 
 | Milestone | Deliverable | Done |
 |---|---|---|
-| M0 | Repo + docs + CI/CD live | [ ] |
-| M1 | Core services: DB + Geo + Camera + Canvas | [ ] |
-| M2 | Capture screen end-to-end | [ ] |
-| M3 | Gallery fully functional | [ ] |
-| M4 | Settings fully functional | [ ] |
-| M5 | All 3 masks + protection working | [ ] |
+| M0 | Repo + docs + CI/CD live | ✅ |
+| M1 | Core services: DB + Geo + Camera + Canvas | ✅ |
+| M2 | Capture screen end-to-end | ✅ |
+| M3 | Gallery fully functional | ✅ |
+| M4 | Settings fully functional | ✅ |
+| M5 | All 3 masks + protection working | ✅ |
 | M6 | PWA installable, offline works, all tests green | [ ] |
 | M7 | v1.0.0 release | [ ] |

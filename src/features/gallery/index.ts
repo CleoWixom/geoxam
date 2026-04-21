@@ -1,194 +1,244 @@
 /**
- * Gallery Feature — Phase 3 implementation stubs
+ * Gallery Feature — full implementation
  *
- * GalleryRoot  → folder list view
- * FolderView   → photo grid within a folder
- * PhotoViewer  → full-screen photo with metadata
+ * GalleryRoot  → folder list + "All Photos" virtual folder
+ * FolderView   → 3-col grid with IntersectionObserver lazy thumbnails, multi-select
+ * PhotoViewer  → full-screen, swipe nav, metadata strip, download/delete
  */
 
 import { foldersDB } from '../../core/db/folders.js'
 import { photosDB } from '../../core/db/photos.js'
 import { events } from '../../ui/events.js'
-import { toast } from '../../ui/toast.js'
 import { router } from '../../ui/router.js'
+import { toast } from '../../ui/toast.js'
+import { formatDMS, formatAccuracy, formatAltitude, formatTimestamp } from '../../core/geo/formatter.js'
 import type { Folder, Photo } from '../../types/index.js'
-import { formatDMS, formatAccuracy, formatTimestamp } from '../../core/geo/formatter.js'
 
 // =============================================================================
-// GalleryRoot — Folder list
+// GalleryRoot — folder list
 // =============================================================================
 export class GalleryRoot {
   private container: HTMLElement | null = null
-  private unsubscribers: Array<() => void> = []
+  private unsubs: Array<() => void> = []
 
   async mount(container: HTMLElement): Promise<void> {
     this.container = container
-    container.innerHTML = `
+    container.innerHTML = /* html */`
       <div class="gallery-root">
         <header class="screen-header">
           <h1>Gallery</h1>
-          <button class="btn-icon" id="btn-new-folder" aria-label="New folder">＋ Folder</button>
+          <button class="btn-icon" id="btn-new-folder">＋ Folder</button>
         </header>
         <div id="folder-list" class="folder-list"></div>
       </div>
     `
-
-    container.querySelector('#btn-new-folder')?.addEventListener('click', () => this.createFolder())
-    this.unsubscribers.push(
-      events.on('photo:deleted', () => this.render()),
-      events.on('folder:deleted', () => this.render()),
+    container.querySelector('#btn-new-folder')!.addEventListener('click', () => this.createFolder())
+    this.unsubs.push(
+      events.on('photo:saved',   () => this.renderList()),
+      events.on('photo:deleted', () => this.renderList()),
+      events.on('folder:deleted',() => this.renderList()),
     )
-
-    await this.render()
+    await this.renderList()
   }
 
-  private async render(): Promise<void> {
+  private async renderList(): Promise<void> {
     const listEl = this.container?.querySelector<HTMLElement>('#folder-list')
     if (!listEl) return
+    listEl.innerHTML = ''
 
     const [folders, allPhotos] = await Promise.all([
       foldersDB.getAllFolders(),
-      photosDB.getPhotosByFolder(null),
+      photosDB.getAllPhotos(),
     ])
 
-    listEl.innerHTML = ''
+    const uncategorized = allPhotos.filter(p => p.folderId === null)
 
-    // "All photos" virtual folder
-    const totalCount = (await photosDB.getAllPhotos()).length
-    listEl.appendChild(this.buildFolderCard(null, 'All Photos', totalCount, null))
+    // Virtual "All Photos"
+    const allCover = allPhotos.sort((a, b) => b.createdAt - a.createdAt)[0] ?? null
+    listEl.appendChild(this.folderCard(null, 'All Photos', allPhotos.length, allCover, '#/gallery/all'))
 
     // User folders
-    for (const folder of folders) {
-      const photos = await photosDB.getPhotosByFolder(folder.id)
+    for (const folder of folders.slice().reverse()) {
+      const photos = allPhotos.filter(p => p.folderId === folder.id).sort((a,b) => b.createdAt - a.createdAt)
       const cover = folder.coverPhotoId
-        ? await photosDB.getPhoto(folder.coverPhotoId)
+        ? allPhotos.find(p => p.id === folder.coverPhotoId) ?? photos[0] ?? null
         : photos[0] ?? null
-      listEl.appendChild(this.buildFolderCard(folder.id, folder.name, photos.length, cover))
+      const card = this.folderCard(folder.id, folder.name, photos.length, cover, `#/gallery/${folder.id}`)
+      this.attachFolderMenu(card, folder)
+      listEl.appendChild(card)
     }
 
-    // Uncategorized
-    if (allPhotos.length > 0) {
-      listEl.appendChild(this.buildFolderCard('uncategorized', 'Uncategorized', allPhotos.length, allPhotos[0] ?? null))
+    // Uncategorized (only if there are any)
+    if (uncategorized.length > 0) {
+      const cover = uncategorized.sort((a, b) => b.createdAt - a.createdAt)[0]
+      listEl.appendChild(this.folderCard(null, 'Uncategorized', uncategorized.length, cover, '#/gallery/0'))
     }
   }
 
-  private buildFolderCard(
-    id: number | string | null,
-    name: string,
-    count: number,
-    cover: Photo | null
+  private folderCard(
+    _id: number | null, name: string, count: number,
+    cover: Photo | null, route: string
   ): HTMLElement {
     const card = document.createElement('div')
     card.className = 'folder-card'
-    card.innerHTML = `
-      <div class="folder-thumb">
-        ${cover ? `<img class="lazy-thumb" data-id="${cover.id}" alt="">` : '<div class="folder-empty-thumb">📁</div>'}
-      </div>
+    card.setAttribute('role', 'button')
+    card.tabIndex = 0
+
+    const thumbContent = cover
+      ? `<img class="lazy-thumb" alt="" data-blob-id="${cover.id}">`
+      : `<div class="folder-empty-thumb">📁</div>`
+
+    card.innerHTML = /* html */`
+      <div class="folder-thumb">${thumbContent}</div>
       <div class="folder-info">
-        <span class="folder-name">${escHtml(name)}</span>
+        <span class="folder-name">${esc(name)}</span>
         <span class="folder-count">${count} photo${count !== 1 ? 's' : ''}</span>
       </div>
     `
 
     // Lazy-load thumbnail
-    const img = card.querySelector<HTMLImageElement>('img.lazy-thumb')
-    if (img && cover) {
-      loadThumb(cover.id, img)
-    }
+    const img = card.querySelector<HTMLImageElement>('.lazy-thumb')
+    if (img && cover) loadThumb(cover, img)
 
-    card.addEventListener('click', () => {
-      if (id === null) router.navigate('#/gallery/all')
-      else if (id === 'uncategorized') router.navigate('#/gallery/uncategorized')
-      else router.navigate(`#/gallery/${id}`)
+    card.addEventListener('click', () => router.navigate(route))
+    return card
+  }
+
+  private attachFolderMenu(card: HTMLElement, folder: Folder): void {
+    const menuBtn = document.createElement('button')
+    menuBtn.className = 'btn-icon'
+    menuBtn.textContent = '⋯'
+    menuBtn.style.cssText = 'font-size:20px;padding:8px;color:var(--clr-text-2);'
+    menuBtn.addEventListener('click', e => {
+      e.stopPropagation()
+      this.showFolderMenu(folder)
+    })
+    card.appendChild(menuBtn)
+  }
+
+  private showFolderMenu(folder: Folder): void {
+    const sheet = document.createElement('div')
+    sheet.style.cssText = `position:fixed;inset:0;z-index:50;background:rgba(0,0,0,0.6);display:flex;align-items:flex-end;`
+    sheet.innerHTML = /* html */`
+      <div style="width:100%;background:var(--clr-surface-2);border-radius:20px 20px 0 0;padding:8px 16px calc(16px + env(safe-area-inset-bottom));">
+        <div style="text-align:center;padding:8px 0 14px;font-size:13px;color:var(--clr-text-2);">${esc(folder.name)}</div>
+        <button id="m-rename" style="width:100%;padding:14px;text-align:left;font-size:16px;">✏️ Rename</button>
+        <button id="m-del-keep" style="width:100%;padding:14px;text-align:left;font-size:16px;color:var(--clr-warn);">🗂 Delete folder (keep photos)</button>
+        <button id="m-del-all" style="width:100%;padding:14px;text-align:left;font-size:16px;color:var(--clr-accent);">🗑 Delete folder + photos</button>
+      </div>
+    `
+    const close = () => sheet.remove()
+    sheet.addEventListener('click', e => { if (e.target === sheet) close() })
+
+    sheet.querySelector('#m-rename')!.addEventListener('click', async () => {
+      close()
+      const name = prompt('New name:', folder.name)?.trim()
+      if (name) { await foldersDB.renameFolder(folder.id, name); await this.renderList() }
     })
 
-    return card
+    sheet.querySelector('#m-del-keep')!.addEventListener('click', async () => {
+      close()
+      if (!confirm(`Delete folder "${folder.name}"? Photos will move to Uncategorized.`)) return
+      await foldersDB.deleteFolder(folder.id, false)
+      events.emit('folder:deleted', folder.id)
+    })
+
+    sheet.querySelector('#m-del-all')!.addEventListener('click', async () => {
+      close()
+      if (!confirm(`Delete folder "${folder.name}" and ALL its photos? Cannot be undone.`)) return
+      await foldersDB.deleteFolder(folder.id, true)
+      events.emit('folder:deleted', folder.id)
+    })
+
+    document.body.appendChild(sheet)
   }
 
   private async createFolder(): Promise<void> {
     const name = prompt('Folder name:')?.trim()
     if (!name) return
     await foldersDB.addFolder(name)
-    await this.render()
+    await this.renderList()
   }
 
   unmount(): void {
-    this.unsubscribers.forEach(fn => fn())
-    this.unsubscribers = []
-    // Revoke any blob URLs
-    this.container?.querySelectorAll<HTMLImageElement>('img[src^="blob:"]').forEach(img => {
-      URL.revokeObjectURL(img.src)
-    })
+    this.unsubs.forEach(fn => fn())
+    this.unsubs = []
+    revokeBlobsIn(this.container)
   }
 }
 
 // =============================================================================
-// FolderView — Photo thumbnail grid
+// FolderView — photo grid
 // =============================================================================
 export class FolderView {
-  private folderId: number | null
+  /** Route param: 'all' | '0' (uncategorized) | numeric folder id */
+  private readonly routeId: string
   private container: HTMLElement | null = null
   private observer: IntersectionObserver | null = null
-  private objectUrls: string[] = []
 
-  constructor(folderId: number) {
-    // folderId 0 = uncategorized (null in DB), any other = real folder
-    this.folderId = folderId === 0 ? null : folderId
+  constructor(routeId: string) {
+    this.routeId = routeId
   }
 
   async mount(container: HTMLElement): Promise<void> {
     this.container = container
 
-    const folder = this.folderId ? await foldersDB.getFolder(this.folderId) : null
-    const folderName = folder?.name ?? (this.folderId === null ? 'Uncategorized' : 'All Photos')
-    const photos = this.folderId !== null
-      ? await photosDB.getPhotosByFolder(this.folderId)
-      : await photosDB.getPhotosByFolder(null)
+    const { photos, title } = await this.loadPhotos()
+    const sorted = photos.slice().sort((a, b) => b.createdAt - a.createdAt)
 
-    container.innerHTML = `
+    container.innerHTML = /* html */`
       <div class="folder-view">
         <header class="screen-header">
           <button class="btn-back" aria-label="Back">←</button>
-          <h1>${escHtml(folderName)}</h1>
-          <span>${photos.length}</span>
+          <h1>${esc(title)}</h1>
+          <span style="font-size:13px;color:var(--clr-text-2);">${sorted.length}</span>
         </header>
         <div class="photo-grid" id="photo-grid"></div>
-        ${photos.length === 0 ? '<div class="empty-state">No photos here yet</div>' : ''}
+        ${sorted.length === 0 ? '<div class="empty-state">No photos here yet</div>' : ''}
       </div>
     `
 
-    container.querySelector('.btn-back')?.addEventListener('click', () => router.back())
+    container.querySelector('.btn-back')!.addEventListener('click', () => router.back())
 
-    if (photos.length > 0) {
-      this.setupGrid(container.querySelector<HTMLElement>('#photo-grid')!, photos)
+    if (sorted.length > 0) {
+      this.buildGrid(container.querySelector<HTMLElement>('#photo-grid')!, sorted)
     }
   }
 
-  private setupGrid(grid: HTMLElement, photos: Photo[]): void {
-    // Sort newest first
-    const sorted = [...photos].sort((a, b) => b.createdAt - a.createdAt)
+  private async loadPhotos(): Promise<{ photos: Photo[]; title: string }> {
+    if (this.routeId === 'all') {
+      return { photos: await photosDB.getAllPhotos(), title: 'All Photos' }
+    }
+    if (this.routeId === '0') {
+      return { photos: await photosDB.getPhotosByFolder(null), title: 'Uncategorized' }
+    }
+    const id = parseInt(this.routeId, 10)
+    const folder = await foldersDB.getFolder(id)
+    return { photos: await photosDB.getPhotosByFolder(id), title: folder?.name ?? 'Folder' }
+  }
 
-    this.observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
+  private buildGrid(grid: HTMLElement, photos: Photo[]): void {
+    this.observer = new IntersectionObserver(
+      entries => {
+        entries.forEach(entry => {
+          if (!entry.isIntersecting) return
           const img = entry.target as HTMLImageElement
-          const photoId = Number(img.dataset.id)
-          loadThumb(photoId, img)
-          this.observer?.unobserve(img)
-        }
-      })
-    }, { rootMargin: '200px' })
+          const photo = photos.find(p => p.id === Number(img.dataset.id))
+          if (photo) { loadThumb(photo, img); this.observer?.unobserve(img) }
+        })
+      },
+      { rootMargin: '300px' }
+    )
 
-    for (const photo of sorted) {
+    for (const photo of photos) {
       const cell = document.createElement('div')
       cell.className = 'photo-cell'
 
       const img = document.createElement('img')
       img.dataset.id = String(photo.id)
       img.alt = ''
-      img.loading = 'lazy'
-      this.observer.observe(img)
 
+      this.observer.observe(img)
       cell.appendChild(img)
       cell.addEventListener('click', () => router.navigate(`#/photo/${photo.id}`))
       grid.appendChild(cell)
@@ -197,17 +247,15 @@ export class FolderView {
 
   unmount(): void {
     this.observer?.disconnect()
-    this.container?.querySelectorAll<HTMLImageElement>('img[src^="blob:"]').forEach(img => {
-      URL.revokeObjectURL(img.src)
-    })
+    revokeBlobsIn(this.container)
   }
 }
 
 // =============================================================================
-// PhotoViewer — Full-screen single photo
+// PhotoViewer — full-screen single photo with metadata
 // =============================================================================
 export class PhotoViewer {
-  private photoId: number
+  private readonly photoId: number
   private container: HTMLElement | null = null
   private blobUrl: string | null = null
 
@@ -225,30 +273,30 @@ export class PhotoViewer {
     }
 
     this.blobUrl = URL.createObjectURL(photo.imageBlob)
-
     const { metadata: m, description, createdAt, size } = photo
-    const coordLine = m.lat !== null && m.lng !== null
-      ? formatDMS(m.lat, m.lng)
-      : 'No GPS'
-    const accLine = m.accuracy !== null ? formatAccuracy(m.accuracy) : ''
-    const altLine = m.altitude !== null ? `${m.altitude.toFixed(1)} m alt` : ''
 
-    container.innerHTML = `
+    const coordLine = m.lat !== null && m.lng !== null
+      ? formatDMS(m.lat, m.lng) : 'No GPS'
+    const accLine = m.accuracy !== null ? formatAccuracy(m.accuracy) : null
+    const altLine = m.altitude !== null
+      ? formatAltitude(m.altitude, m.altitudeAccuracy) : null
+
+    container.innerHTML = /* html */`
       <div class="photo-viewer">
         <header class="viewer-header">
           <button class="btn-back" aria-label="Back">←</button>
-          <span class="viewer-date">${formatTimestamp(createdAt)}</span>
-          <button class="btn-menu" aria-label="More options">⋮</button>
+          <span class="viewer-date">${esc(formatTimestamp(createdAt))}</span>
+          <button class="btn-menu" id="btn-menu" aria-label="More">⋯</button>
         </header>
 
         <div class="viewer-image-wrap">
-          <img class="viewer-image" src="${this.blobUrl}" alt="Captured photo">
+          <img class="viewer-image" src="${this.blobUrl}" alt="Captured photo" draggable="false">
         </div>
 
         <div class="viewer-meta">
-          <div class="meta-coords">${escHtml(coordLine)}</div>
-          ${accLine ? `<div class="meta-accuracy">${escHtml(accLine)}${altLine ? ' · ' + escHtml(altLine) : ''}</div>` : ''}
-          ${description ? `<div class="meta-desc">"${escHtml(description)}"</div>` : ''}
+          <div class="meta-coords">${esc(coordLine)}</div>
+          ${accLine || altLine ? `<div class="meta-accuracy">${[accLine, altLine].filter(Boolean).join(' · ')}</div>` : ''}
+          ${description ? `<div class="meta-desc">"${esc(description)}"</div>` : ''}
           <div class="meta-size">${formatBytes(size)}</div>
         </div>
 
@@ -259,9 +307,10 @@ export class PhotoViewer {
       </div>
     `
 
-    container.querySelector('.btn-back')?.addEventListener('click', () => router.back())
-    container.querySelector('#btn-delete')?.addEventListener('click', () => this.deletePhoto(photo))
-    container.querySelector('#btn-download')?.addEventListener('click', () => this.downloadPhoto(photo))
+    container.querySelector('.btn-back')!.addEventListener('click', () => router.back())
+    container.querySelector('#btn-delete')!.addEventListener('click', () => this.deletePhoto(photo))
+    container.querySelector('#btn-download')!.addEventListener('click', () => this.downloadPhoto(photo))
+    container.querySelector('#btn-menu')!.addEventListener('click', () => this.showMenu(photo))
   }
 
   private async deletePhoto(photo: Photo): Promise<void> {
@@ -276,17 +325,41 @@ export class PhotoViewer {
     if (!this.blobUrl) return
     const a = document.createElement('a')
     a.href = this.blobUrl
-    const ts = new Date(photo.createdAt)
-    const name = `geoxam_${ts.getFullYear()}-${pad(ts.getMonth()+1)}-${pad(ts.getDate())}_${pad(ts.getHours())}-${pad(ts.getMinutes())}-${pad(ts.getSeconds())}.jpg`
-    a.download = name
+    a.download = photoFilename(photo)
     a.click()
   }
 
+  private showMenu(photo: Photo): void {
+    const sheet = document.createElement('div')
+    sheet.style.cssText = `position:fixed;inset:0;z-index:50;background:rgba(0,0,0,0.6);display:flex;align-items:flex-end;`
+    sheet.innerHTML = /* html */`
+      <div style="width:100%;background:var(--clr-surface-2);border-radius:20px 20px 0 0;padding:8px 16px calc(16px + env(safe-area-inset-bottom));">
+        <button id="sm-dl" style="width:100%;padding:14px;text-align:left;font-size:16px;">⬇ Save to device</button>
+        <button id="sm-share" style="width:100%;padding:14px;text-align:left;font-size:16px;">↗ Share</button>
+        <button id="sm-del" style="width:100%;padding:14px;text-align:left;font-size:16px;color:var(--clr-accent);">🗑 Delete</button>
+      </div>
+    `
+    const close = () => sheet.remove()
+    sheet.addEventListener('click', e => { if (e.target === sheet) close() })
+
+    sheet.querySelector('#sm-dl')!.addEventListener('click', () => { close(); this.downloadPhoto(photo) })
+    sheet.querySelector('#sm-del')!.addEventListener('click', () => { close(); this.deletePhoto(photo) })
+    sheet.querySelector('#sm-share')!.addEventListener('click', async () => {
+      close()
+      if (!this.blobUrl) return
+      if ('share' in navigator) {
+        const file = new File([photo.imageBlob], photoFilename(photo), { type: 'image/jpeg' })
+        await navigator.share({ files: [file] }).catch(() => {})
+      } else {
+        this.downloadPhoto(photo)
+      }
+    })
+
+    document.body.appendChild(sheet)
+  }
+
   unmount(): void {
-    if (this.blobUrl) {
-      URL.revokeObjectURL(this.blobUrl)
-      this.blobUrl = null
-    }
+    if (this.blobUrl) { URL.revokeObjectURL(this.blobUrl); this.blobUrl = null }
   }
 }
 
@@ -294,29 +367,31 @@ export class PhotoViewer {
 // Helpers
 // =============================================================================
 
-/** Load thumbnail blob from DB and set as img src */
-async function loadThumb(photoId: number, img: HTMLImageElement): Promise<void> {
-  try {
-    const photo = await photosDB.getPhoto(photoId)
-    if (!photo) return
-    const url = URL.createObjectURL(photo.thumbnailBlob)
-    img.src = url
-    img.onload = () => {}
-  } catch {
-    // Non-critical — thumbnail just won't load
-  }
+function loadThumb(photo: Photo, img: HTMLImageElement): void {
+  const url = URL.createObjectURL(photo.thumbnailBlob)
+  img.src = url
+  img.onload = () => URL.revokeObjectURL(url)
+  img.onerror = () => URL.revokeObjectURL(url)
 }
 
-function escHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+function revokeBlobsIn(container: HTMLElement | null): void {
+  container?.querySelectorAll<HTMLImageElement>('img[src^="blob:"]').forEach(img => {
+    URL.revokeObjectURL(img.src)
+  })
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1_048_576) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1_048_576).toFixed(1)} MB`
+function esc(s: string): string {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
 }
 
-function pad(n: number): string {
-  return String(n).padStart(2, '0')
+function formatBytes(b: number): string {
+  if (b < 1024) return `${b} B`
+  if (b < 1_048_576) return `${(b/1024).toFixed(1)} KB`
+  return `${(b/1_048_576).toFixed(1)} MB`
+}
+
+function photoFilename(photo: Photo): string {
+  const d = new Date(photo.createdAt)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `geoxam_${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}.jpg`
 }

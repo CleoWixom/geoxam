@@ -1,21 +1,16 @@
 /**
- * SettingsScreen — Phase 4 implementation stub
- *
- * Panels:
- *   - Photo quality (resolution, JPEG quality, camera facing)
- *   - Overlay (color, font, size, position, toggles, live preview)
- *   - Crosshair (style, color, size, opacity)
- *   - Storage (usage stats, clear, export)
- *   - Masking (enable, type, protection, set code)
+ * SettingsScreen — full implementation
+ * All 5 panels: Photo, Overlay (+ live preview), Crosshair, Storage, Mask
  */
 
 import { settingsDB } from '../../core/db/settings.js'
 import { photosDB } from '../../core/db/photos.js'
-import { foldersDB } from '../../core/db/folders.js'
 import { router } from '../../ui/router.js'
 import { toast } from '../../ui/toast.js'
-import type { SettingsMap, ResolutionPreset, CrosshairStyle, MaskType, MaskProtection } from '../../types/index.js'
 import { hashCode } from '../../core/crypto/index.js'
+import { drawOverlay } from '../../core/canvas/overlay.js'
+import { drawCrosshair } from '../../core/canvas/crosshair.js'
+import type { SettingsMap, ResolutionPreset, CrosshairStyle, MaskType, MaskProtection } from '../../types/index.js'
 
 export class SettingsScreen {
   private container: HTMLElement | null = null
@@ -25,7 +20,7 @@ export class SettingsScreen {
     this.container = container
     this.settings = await settingsDB.getAllSettings()
 
-    container.innerHTML = `
+    container.innerHTML = /* html */`
       <div class="settings-screen">
         <header class="screen-header">
           <button class="btn-back" aria-label="Back">←</button>
@@ -34,8 +29,7 @@ export class SettingsScreen {
         <div class="settings-body" id="settings-body"></div>
       </div>
     `
-
-    container.querySelector('.btn-back')?.addEventListener('click', () => router.back())
+    container.querySelector('.btn-back')!.addEventListener('click', () => router.back())
 
     const body = container.querySelector<HTMLElement>('#settings-body')!
     body.appendChild(this.buildPhotoSection())
@@ -45,179 +39,293 @@ export class SettingsScreen {
     body.appendChild(this.buildMaskSection())
   }
 
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   // Photo Quality
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   private buildPhotoSection(): HTMLElement {
     const s = this.settings!
-    const sec = buildSection('📷 Photo Quality')
+    const sec = section('📷 Photo Quality')
 
-    // Resolution selector
-    const resPresets: ResolutionPreset[] = ['low', 'medium', 'high', 'max']
-    const resLabels = { low: 'HD', medium: 'FHD', high: '4K', max: 'Max' }
-    sec.appendChild(buildLabel('Resolution'))
-    const resSeg = buildSegmented(resPresets, resLabels, s['photo.resolution'])
-    resSeg.addEventListener('change', e => {
-      const val = (e as CustomEvent<string>).detail as ResolutionPreset
-      settingsDB.setSetting('photo.resolution', val)
-    })
-    sec.appendChild(resSeg)
+    sec.appendChild(label('Resolution'))
+    const res = segmented<ResolutionPreset>(
+      ['low','medium','high','max'],
+      { low:'HD', medium:'FHD', high:'4K', max:'Max' },
+      s['photo.resolution']
+    )
+    res.addEventListener('change', e => settingsDB.setSetting('photo.resolution', (e as CustomEvent<string>).detail as ResolutionPreset))
+    sec.appendChild(res)
 
-    // JPEG quality slider
-    sec.appendChild(buildLabel('JPEG Quality'))
-    const qualSlider = buildSlider(50, 100, Math.round(s['photo.quality'] * 100), '%')
-    qualSlider.addEventListener('input', (e) => {
-      const val = Number((e.target as HTMLInputElement).value) / 100
-      settingsDB.setSetting('photo.quality', val)
-    })
-    sec.appendChild(qualSlider)
+    sec.appendChild(label('JPEG Quality'))
+    sec.appendChild(slider(50, 100, Math.round(s['photo.quality'] * 100), '%', v =>
+      settingsDB.setSetting('photo.quality', v / 100)
+    ))
 
-    // Camera facing
-    sec.appendChild(buildLabel('Camera'))
-    const facingSeg = buildSegmented(['environment', 'user'], { environment: 'Back', user: 'Front' }, s['photo.facing'])
-    facingSeg.addEventListener('change', e => {
-      const val = (e as CustomEvent<string>).detail as 'environment' | 'user'
-      settingsDB.setSetting('photo.facing', val)
-    })
-    sec.appendChild(facingSeg)
+    sec.appendChild(label('Camera'))
+    const facing = segmented(
+      ['environment','user'] as const,
+      { environment:'Back', user:'Front' },
+      s['photo.facing']
+    )
+    facing.addEventListener('change', e =>
+      settingsDB.setSetting('photo.facing', (e as CustomEvent<string>).detail as 'environment' | 'user')
+    )
+    sec.appendChild(facing)
 
     return sec
   }
 
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   // Overlay
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   private buildOverlaySection(): HTMLElement {
     const s = this.settings!
-    const sec = buildSection('🖊 Coordinate Overlay')
+    const sec = section('🖊 Coordinate Overlay')
 
-    sec.appendChild(buildToggleRow('Show overlay', s['overlay.enabled'], val =>
-      settingsDB.setSetting('overlay.enabled', val)
-    ))
+    const preview = this.buildOverlayPreview()
+    sec.appendChild(preview)
 
-    // Color presets
-    sec.appendChild(buildLabel('Color'))
-    const presets = ['#ffffff', '#ffff00', '#000000', '#00ff88', '#ff3b30']
+    const refresh = () => this.refreshOverlayPreview(preview, this.settings!)
+
+    sec.appendChild(toggleRow('Show overlay', s['overlay.enabled'], v => {
+      settingsDB.setSetting('overlay.enabled', v); refresh()
+    }))
+
+    sec.appendChild(label('Color'))
+    const presets = ['#ffffff','#ffff00','#000000','#00ff88','#ff3b30']
     const colorRow = document.createElement('div')
     colorRow.className = 'color-presets'
     for (const hex of presets) {
       const dot = document.createElement('button')
       dot.className = 'color-dot' + (s['overlay.color'] === hex ? ' active' : '')
       dot.style.background = hex
-      dot.setAttribute('aria-label', hex)
       dot.addEventListener('click', () => {
         colorRow.querySelectorAll('.color-dot').forEach(d => d.classList.remove('active'))
         dot.classList.add('active')
         settingsDB.setSetting('overlay.color', hex)
+        this.settings = { ...this.settings!, 'overlay.color': hex }
+        refresh()
       })
       colorRow.appendChild(dot)
     }
-    // Custom color picker
     const picker = document.createElement('input')
-    picker.type = 'color'
-    picker.value = s['overlay.color']
-    picker.className = 'color-picker'
+    picker.type = 'color'; picker.className = 'color-picker'; picker.value = s['overlay.color']
     picker.addEventListener('change', e => {
-      settingsDB.setSetting('overlay.color', (e.target as HTMLInputElement).value)
+      const v = (e.target as HTMLInputElement).value
+      settingsDB.setSetting('overlay.color', v)
+      this.settings = { ...this.settings!, 'overlay.color': v }
+      refresh()
     })
     colorRow.appendChild(picker)
     sec.appendChild(colorRow)
 
-    // Font size
-    sec.appendChild(buildLabel('Font Size'))
-    sec.appendChild(buildSlider(10, 24, s['overlay.fontSize'], 'px', val =>
-      settingsDB.setSetting('overlay.fontSize', val)
-    ))
+    sec.appendChild(label('Font Size'))
+    sec.appendChild(slider(10, 24, s['overlay.fontSize'], 'px', v => {
+      settingsDB.setSetting('overlay.fontSize', v)
+      this.settings = { ...this.settings!, 'overlay.fontSize': v }
+      refresh()
+    }))
 
-    // Font family
-    sec.appendChild(buildLabel('Font'))
-    const fontSeg = buildSegmented(
-      ['monospace', 'sans-serif', 'serif'],
-      { 'monospace': 'Mono', 'sans-serif': 'Sans', 'serif': 'Serif' },
+    sec.appendChild(label('Font'))
+    const font = segmented(
+      ['monospace','sans-serif','serif'] as const,
+      { 'monospace':'Mono', 'sans-serif':'Sans', 'serif':'Serif' },
       s['overlay.fontFamily']
     )
-    fontSeg.addEventListener('change', e => {
-      settingsDB.setSetting('overlay.fontFamily', (e as CustomEvent<string>).detail as 'monospace' | 'sans-serif' | 'serif')
+    font.addEventListener('change', e => {
+      const v = (e as CustomEvent<string>).detail as 'monospace'|'sans-serif'|'serif'
+      settingsDB.setSetting('overlay.fontFamily', v)
+      this.settings = { ...this.settings!, 'overlay.fontFamily': v }
+      refresh()
     })
-    sec.appendChild(fontSeg)
+    sec.appendChild(font)
 
-    // Position grid
-    sec.appendChild(buildLabel('Position'))
-    sec.appendChild(buildPositionPicker(s['overlay.position'], val =>
-      settingsDB.setSetting('overlay.position', val)
-    ))
+    sec.appendChild(label('Position'))
+    sec.appendChild(positionPicker(s['overlay.position'], v => {
+      settingsDB.setSetting('overlay.position', v)
+      this.settings = { ...this.settings!, 'overlay.position': v }
+      refresh()
+    }))
 
-    // Toggles
-    sec.appendChild(buildToggleRow('Show accuracy', s['overlay.showAccuracy'], v => settingsDB.setSetting('overlay.showAccuracy', v)))
-    sec.appendChild(buildToggleRow('Show altitude', s['overlay.showAltitude'], v => settingsDB.setSetting('overlay.showAltitude', v)))
-    sec.appendChild(buildToggleRow('Show timestamp', s['overlay.showTimestamp'], v => settingsDB.setSetting('overlay.showTimestamp', v)))
-    sec.appendChild(buildToggleRow('Show description', s['overlay.showDescription'], v => settingsDB.setSetting('overlay.showDescription', v)))
+    const bools: Array<[string, keyof SettingsMap]> = [
+      ['Show accuracy', 'overlay.showAccuracy'],
+      ['Show altitude', 'overlay.showAltitude'],
+      ['Show timestamp', 'overlay.showTimestamp'],
+      ['Show description', 'overlay.showDescription'],
+    ]
+    for (const [lbl, key] of bools) {
+      sec.appendChild(toggleRow(lbl, s[key] as boolean, v => {
+        settingsDB.setSetting(key as 'overlay.showAccuracy', v)
+        this.settings = { ...this.settings!, [key]: v }
+        refresh()
+      }))
+    }
 
     return sec
   }
 
-  // -------------------------------------------------------------------------
+  private buildOverlayPreview(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'overlay-preview'
+    const canvas = document.createElement('canvas')
+    canvas.className = 'overlay-preview-canvas'
+    canvas.width = 400; canvas.height = 140
+    wrap.appendChild(canvas)
+    // Draw after next paint
+    requestAnimationFrame(() => this.refreshOverlayPreview(wrap, this.settings!))
+    return wrap
+  }
+
+  private refreshOverlayPreview(wrap: HTMLElement, s: SettingsMap): void {
+    const canvas = wrap.querySelector<HTMLCanvasElement>('canvas')
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')!
+    const W = canvas.width, H = canvas.height
+
+    // Background
+    ctx.fillStyle = '#1a3a1a'
+    ctx.fillRect(0, 0, W, H)
+    // Fake scene
+    ctx.fillStyle = '#2a6a2a'
+    ctx.fillRect(0, H * 0.6, W, H * 0.4)
+
+    drawOverlay(ctx, W, H,
+      { lat: 52.3626, lng: 5.1234, accuracy: 12, altitude: 14.3, altitudeAccuracy: 2, heading: null, speed: null, timestamp: Date.now() },
+      'Sample description', {
+        enabled:         s['overlay.enabled'],
+        color:           s['overlay.color'],
+        fontSize:        Math.round(s['overlay.fontSize'] * 0.7), // scale down for preview
+        fontFamily:      s['overlay.fontFamily'],
+        position:        s['overlay.position'],
+        showAccuracy:    s['overlay.showAccuracy'],
+        showAltitude:    s['overlay.showAltitude'],
+        showTimestamp:   s['overlay.showTimestamp'],
+        showDescription: s['overlay.showDescription'],
+      }, Date.now()
+    )
+  }
+
+  // ---------------------------------------------------------------------------
   // Crosshair
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   private buildCrosshairSection(): HTMLElement {
     const s = this.settings!
-    const sec = buildSection('🎯 Crosshair')
+    const sec = section('🎯 Crosshair')
 
-    sec.appendChild(buildToggleRow('Show crosshair (viewfinder only)', s['crosshair.enabled'], val =>
-      settingsDB.setSetting('crosshair.enabled', val)
+    // Live crosshair preview canvas
+    const prevWrap = document.createElement('div')
+    prevWrap.className = 'overlay-preview'
+    const prevCanvas = document.createElement('canvas')
+    prevCanvas.className = 'overlay-preview-canvas'
+    prevCanvas.width = 400; prevCanvas.height = 140
+    prevWrap.appendChild(prevCanvas)
+    sec.appendChild(prevWrap)
+
+    const refreshCrosshair = () => {
+      const ctx = prevCanvas.getContext('2d')!
+      ctx.fillStyle = '#111'
+      ctx.fillRect(0, 0, prevCanvas.width, prevCanvas.height)
+      drawCrosshair(ctx, prevCanvas.width, prevCanvas.height, {
+        enabled: true,
+        color:   this.settings!['crosshair.color'],
+        style:   this.settings!['crosshair.style'],
+        size:    this.settings!['crosshair.size'],
+        opacity: this.settings!['crosshair.opacity'],
+      })
+    }
+    requestAnimationFrame(refreshCrosshair)
+
+    sec.appendChild(toggleRow('Show crosshair on viewfinder', s['crosshair.enabled'], v =>
+      settingsDB.setSetting('crosshair.enabled', v)
     ))
 
-    sec.appendChild(buildLabel('Style'))
-    const styleSeg = buildSegmented<CrosshairStyle>(
-      ['cross', 'dot', 'circle', 'brackets'],
-      { cross: '＋', dot: '·', circle: '⊕', brackets: '⌐' },
+    sec.appendChild(label('Style'))
+    const styleSeg = segmented<CrosshairStyle>(
+      ['cross','dot','circle','brackets'],
+      { cross:'＋', dot:'·', circle:'⊕', brackets:'⌐ ⌐' },
       s['crosshair.style']
     )
-    styleSeg.addEventListener('change', e =>
-      settingsDB.setSetting('crosshair.style', (e as CustomEvent<string>).detail as CrosshairStyle)
-    )
+    styleSeg.addEventListener('change', e => {
+      const v = (e as CustomEvent<string>).detail as CrosshairStyle
+      settingsDB.setSetting('crosshair.style', v)
+      this.settings = { ...this.settings!, 'crosshair.style': v }
+      refreshCrosshair()
+    })
     sec.appendChild(styleSeg)
 
-    sec.appendChild(buildLabel('Size'))
-    const sizeSeg = buildSegmented(
-      ['small', 'medium', 'large'],
-      { small: 'S', medium: 'M', large: 'L' },
+    sec.appendChild(label('Color'))
+    const cpWrap = document.createElement('div')
+    cpWrap.className = 'color-presets'
+    for (const hex of ['#ff3b30','#ffffff','#ffff00','#00ff88','#0a84ff']) {
+      const dot = document.createElement('button')
+      dot.className = 'color-dot' + (s['crosshair.color'] === hex ? ' active' : '')
+      dot.style.background = hex
+      dot.addEventListener('click', () => {
+        cpWrap.querySelectorAll('.color-dot').forEach(d => d.classList.remove('active'))
+        dot.classList.add('active')
+        settingsDB.setSetting('crosshair.color', hex)
+        this.settings = { ...this.settings!, 'crosshair.color': hex }
+        refreshCrosshair()
+      })
+      cpWrap.appendChild(dot)
+    }
+    const cp2 = document.createElement('input')
+    cp2.type = 'color'; cp2.className = 'color-picker'; cp2.value = s['crosshair.color']
+    cp2.addEventListener('change', e => {
+      const v = (e.target as HTMLInputElement).value
+      settingsDB.setSetting('crosshair.color', v)
+      this.settings = { ...this.settings!, 'crosshair.color': v }
+      refreshCrosshair()
+    })
+    cpWrap.appendChild(cp2)
+    sec.appendChild(cpWrap)
+
+    sec.appendChild(label('Size'))
+    const sizeSeg = segmented(
+      ['small','medium','large'] as const,
+      { small:'S', medium:'M', large:'L' },
       s['crosshair.size']
     )
-    sizeSeg.addEventListener('change', e =>
-      settingsDB.setSetting('crosshair.size', (e as CustomEvent<string>).detail as 'small' | 'medium' | 'large')
-    )
+    sizeSeg.addEventListener('change', e => {
+      const v = (e as CustomEvent<string>).detail as 'small'|'medium'|'large'
+      settingsDB.setSetting('crosshair.size', v)
+      this.settings = { ...this.settings!, 'crosshair.size': v }
+      refreshCrosshair()
+    })
     sec.appendChild(sizeSeg)
 
-    sec.appendChild(buildLabel('Opacity'))
-    sec.appendChild(buildSlider(30, 100, Math.round(s['crosshair.opacity'] * 100), '%', val =>
-      settingsDB.setSetting('crosshair.opacity', val / 100)
-    ))
+    sec.appendChild(label('Opacity'))
+    sec.appendChild(slider(30, 100, Math.round(s['crosshair.opacity'] * 100), '%', v => {
+      settingsDB.setSetting('crosshair.opacity', v / 100)
+      this.settings = { ...this.settings!, 'crosshair.opacity': v / 100 }
+      refreshCrosshair()
+    }))
 
     return sec
   }
 
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   // Storage
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   private async buildStorageSection(): Promise<HTMLElement> {
-    const sec = buildSection('🗄 Storage')
-
+    const sec = section('🗄 Storage')
     const stats = await photosDB.getStorageStats()
     const usedMB = (stats.used / 1_048_576).toFixed(1)
-    const quotaMB = stats.estimate ? (stats.estimate.quota / 1_048_576).toFixed(0) : '?'
-    const percent = stats.estimate
-      ? Math.round((stats.estimate.usage / stats.estimate.quota) * 100)
-      : 0
+    const quota = stats.estimate?.quota ?? 0
+    const usage = stats.estimate?.usage ?? 0
+    const quotaMB = quota ? (quota / 1_048_576).toFixed(0) : '?'
+    const pct = quota ? Math.min(Math.round((usage / quota) * 100), 100) : 0
+    const fillClass = pct > 80 ? 'danger' : pct > 60 ? 'warn' : ''
 
-    sec.innerHTML += `
-      <div class="storage-info">
-        <div class="storage-bar">
-          <div class="storage-bar-fill" style="width: ${percent}%"></div>
-        </div>
-        <p>${usedMB} MB used · ${stats.count} photo${stats.count !== 1 ? 's' : ''} · ~${quotaMB} MB quota</p>
+    const infoDiv = document.createElement('div')
+    infoDiv.className = 'storage-info'
+    infoDiv.innerHTML = /* html */`
+      <div class="storage-bar">
+        <div class="storage-bar-fill ${fillClass}" style="width:${pct}%"></div>
       </div>
+      <p>${usedMB} MB used by photos · ~${quotaMB} MB available</p>
+      <p>${stats.count} photo${stats.count !== 1 ? 's' : ''}</p>
     `
+    sec.appendChild(infoDiv)
 
     const clearBtn = document.createElement('button')
     clearBtn.className = 'btn-destructive'
@@ -226,30 +334,28 @@ export class SettingsScreen {
       if (!confirm(`Delete all ${stats.count} photos? This cannot be undone.`)) return
       await photosDB.deleteAll()
       toast('All photos deleted', 'success')
-      // Re-render section
       const fresh = await this.buildStorageSection()
       sec.replaceWith(fresh)
     })
     sec.appendChild(clearBtn)
-
     return sec
   }
 
-  // -------------------------------------------------------------------------
-  // Masking
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Mask
+  // ---------------------------------------------------------------------------
   private buildMaskSection(): HTMLElement {
     const s = this.settings!
-    const sec = buildSection('🕵️ Disguise')
+    const sec = section('🕵️ Disguise')
 
-    sec.appendChild(buildToggleRow('Enable disguise mode', s['mask.enabled'], val =>
-      settingsDB.setSetting('mask.enabled', val)
+    sec.appendChild(toggleRow('Enable disguise mode', s['mask.enabled'], v =>
+      settingsDB.setSetting('mask.enabled', v)
     ))
 
-    sec.appendChild(buildLabel('Disguise as'))
-    const typeSeg = buildSegmented<MaskType>(
-      ['calculator', 'calendar', 'notepad'],
-      { calculator: '🧮 Calc', calendar: '📅 Calendar', notepad: '📝 Notes' },
+    sec.appendChild(label('Disguise as'))
+    const typeSeg = segmented<MaskType>(
+      ['calculator','calendar','notepad'],
+      { calculator:'🧮 Calc', calendar:'📅 Cal', notepad:'📝 Notes' },
       s['mask.type']
     )
     typeSeg.addEventListener('change', e =>
@@ -257,10 +363,10 @@ export class SettingsScreen {
     )
     sec.appendChild(typeSeg)
 
-    sec.appendChild(buildLabel('Protection'))
-    const protSeg = buildSegmented<MaskProtection>(
-      ['none', 'pin', 'pattern'],
-      { none: 'None', pin: 'PIN', pattern: 'Pattern' },
+    sec.appendChild(label('Access protection'))
+    const protSeg = segmented<MaskProtection>(
+      ['none','pin','pattern'],
+      { none:'None', pin:'PIN', pattern:'Pattern' },
       s['mask.protection']
     )
     protSeg.addEventListener('change', e =>
@@ -268,22 +374,17 @@ export class SettingsScreen {
     )
     sec.appendChild(protSeg)
 
-    // Set code button
     const setCodeBtn = document.createElement('button')
     setCodeBtn.className = 'btn-secondary'
     setCodeBtn.textContent = 'Set Access Code'
     setCodeBtn.addEventListener('click', async () => {
-      const protection = await settingsDB.getSetting('mask.protection')
-      if (protection === 'none') {
-        toast('Select PIN or Pattern protection first', 'warning')
-        return
-      }
-      if (protection === 'pin') {
-        const pin = prompt('Enter new PIN (4–8 digits):')?.trim()
+      const prot = await settingsDB.getSetting('mask.protection')
+      if (prot === 'none') { toast('Select PIN or Pattern first', 'warning'); return }
+      if (prot === 'pin') {
+        const pin = prompt('New PIN (4–8 digits):')?.trim()
         if (!pin || !/^\d{4,8}$/.test(pin)) { toast('Invalid PIN', 'error'); return }
-        const hash = await hashCode(pin)
-        await settingsDB.setSetting('mask.codeHash', hash)
-        toast('PIN set', 'success')
+        await settingsDB.setSetting('mask.codeHash', await hashCode(pin))
+        toast('PIN saved', 'success')
       }
     })
     sec.appendChild(setCodeBtn)
@@ -295,50 +396,43 @@ export class SettingsScreen {
 }
 
 // =============================================================================
-// Shared builder helpers
+// Builder helpers (pure DOM, no state)
 // =============================================================================
-
-function buildSection(title: string): HTMLElement {
-  const sec = document.createElement('div')
-  sec.className = 'settings-section'
-  const h2 = document.createElement('h2')
-  h2.className = 'settings-section-title'
-  h2.textContent = title
-  sec.appendChild(h2)
-  return sec
+function section(title: string): HTMLElement {
+  const el = document.createElement('div')
+  el.className = 'settings-section'
+  el.innerHTML = `<div class="settings-section-title">${title}</div>`
+  return el
 }
 
-function buildLabel(text: string): HTMLElement {
-  const label = document.createElement('div')
-  label.className = 'settings-label'
-  label.textContent = text
-  return label
+function label(text: string): HTMLElement {
+  const el = document.createElement('div')
+  el.className = 'settings-label'
+  el.textContent = text
+  return el
 }
 
-function buildToggleRow(label: string, value: boolean, onChange: (v: boolean) => void): HTMLElement {
+function toggleRow(lbl: string, value: boolean, onChange: (v: boolean) => void): HTMLElement {
   const row = document.createElement('div')
   row.className = 'toggle-row'
   row.innerHTML = `
-    <span>${label}</span>
+    <span>${lbl}</span>
     <label class="toggle-switch">
       <input type="checkbox" ${value ? 'checked' : ''}>
       <span class="toggle-track"></span>
     </label>
   `
-  row.querySelector('input')?.addEventListener('change', e => {
+  row.querySelector('input')!.addEventListener('change', e =>
     onChange((e.target as HTMLInputElement).checked)
-  })
+  )
   return row
 }
 
-function buildSlider(min: number, max: number, value: number, unit: string, onChange?: (v: number) => void): HTMLElement {
+function slider(min: number, max: number, value: number, unit: string, onChange?: (v: number) => void): HTMLElement {
   const wrap = document.createElement('div')
   wrap.className = 'slider-row'
   const input = document.createElement('input')
-  input.type = 'range'
-  input.min = String(min)
-  input.max = String(max)
-  input.value = String(value)
+  input.type = 'range'; input.min = String(min); input.max = String(max); input.value = String(value)
   const display = document.createElement('span')
   display.className = 'slider-value'
   display.textContent = `${value}${unit}`
@@ -347,15 +441,12 @@ function buildSlider(min: number, max: number, value: number, unit: string, onCh
     display.textContent = `${v}${unit}`
     onChange?.(v)
   })
-  wrap.appendChild(input)
-  wrap.appendChild(display)
+  wrap.appendChild(input); wrap.appendChild(display)
   return wrap
 }
 
-function buildSegmented<T extends string>(
-  options: T[],
-  labels: Record<T, string>,
-  current: T
+function segmented<T extends string>(
+  options: readonly T[], labels: Record<T, string>, current: T
 ): HTMLElement {
   const wrap = document.createElement('div')
   wrap.className = 'segmented-control'
@@ -373,17 +464,13 @@ function buildSegmented<T extends string>(
   return wrap
 }
 
-function buildPositionPicker(
+function positionPicker(
   current: string,
-  onChange: (v: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right') => void
+  onChange: (v: 'top-left'|'top-right'|'bottom-left'|'bottom-right') => void
 ): HTMLElement {
   const grid = document.createElement('div')
   grid.className = 'position-grid'
-  const positions = [
-    ['top-left', '↖'], ['top-right', '↗'],
-    ['bottom-left', '↙'], ['bottom-right', '↘'],
-  ] as const
-
+  const positions = [['top-left','↖'],['top-right','↗'],['bottom-left','↙'],['bottom-right','↘']] as const
   for (const [pos, icon] of positions) {
     const btn = document.createElement('button')
     btn.className = 'pos-btn' + (pos === current ? ' active' : '')

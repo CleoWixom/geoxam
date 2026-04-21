@@ -1,0 +1,32 @@
+{
+  "name": "geoxam",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Geo-tagged photo capture app with disguise mode",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "idb": "^8.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.44.0",
+    "@types/node": "^20.12.0",
+    "@vitest/coverage-v8": "^1.5.0",
+    "typescript": "^5.4.0",
+    "vite": "^5.2.0",
+    "vite-plugin-pwa": "^0.20.0",
+    "vitest": "^1.5.0",
+    "workbox-window": "^7.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

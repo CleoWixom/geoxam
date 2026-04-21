@@ -11,7 +11,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:unit": "vitest run --config vitest.config.ts",
+    "test:browser": "vitest run --config vitest.browser.config.ts"
   },
   "dependencies": {
     "idb": "^8.0.0"
@@ -24,7 +26,8 @@
     "vite": "^5.2.0",
     "vite-plugin-pwa": "^0.20.0",
     "vitest": "^1.5.0",
-    "workbox-window": "^7.1.0"
+    "workbox-window": "^7.1.0",
+    "@vitest/browser": "^1.5.0"
   },
   "engines": {
     "node": ">=18"

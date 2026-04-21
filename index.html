@@ -3,19 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+    <!-- theme-color updated dynamically by applyIdentity() -->
     <meta name="theme-color" content="#000000" />
 
-    <!-- PWA / iOS -->
+    <!-- PWA / iOS — values updated dynamically by applyIdentity() -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="GeoXam" />
-    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
 
-    <!-- Prevent text size adjustment on orientation change -->
+    <!-- manifest link — href swapped dynamically by applyIdentity() -->
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- favicon -->
+    <link rel="apple-touch-icon" href="/icons/icon-real-192.png" />
+    <link rel="icon" type="image/png" href="/icons/icon-real-96.png" />
+
     <meta name="format-detection" content="telephone=no" />
 
+    <!-- title updated dynamically by applyIdentity() -->
     <title>GeoXam</title>
-    <link rel="icon" type="image/png" href="/icons/icon-96.png" />
   </head>
   <body>
     <div id="app"></div>

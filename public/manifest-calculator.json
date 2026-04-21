@@ -1,0 +1,22 @@
+{
+  "name": "Calculator",
+  "short_name": "Calculator",
+  "description": "Simple calculator",
+  "theme_color": "#1c1c1e",
+  "background_color": "#1c1c1e",
+  "display": "standalone",
+  "orientation": "portrait",
+  "start_url": "/",
+  "scope": "/",
+  "lang": "en",
+  "icons": [
+    { "src": "/icons/icon-calculator-72.png",  "sizes": "72x72",   "type": "image/png" },
+    { "src": "/icons/icon-calculator-96.png",  "sizes": "96x96",   "type": "image/png" },
+    { "src": "/icons/icon-calculator-128.png", "sizes": "128x128", "type": "image/png" },
+    { "src": "/icons/icon-calculator-144.png", "sizes": "144x144", "type": "image/png" },
+    { "src": "/icons/icon-calculator-152.png", "sizes": "152x152", "type": "image/png" },
+    { "src": "/icons/icon-calculator-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icons/icon-calculator-384.png", "sizes": "384x384", "type": "image/png" },
+    { "src": "/icons/icon-calculator-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

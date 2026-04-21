@@ -1,57 +1,62 @@
 /**
  * GeoXam — Application Bootstrap
  *
- * Order of operations:
- * 1. Init IndexedDB connection (eagerly, so it's ready before first interaction)
- * 2. Check mask.enabled setting
- * 3a. If mask on  → mount MaskManager (shows disguise UI)
- * 3b. If mask off → mount normal app shell + init router
+ * Order of operations (strict):
+ * 1. Read mask settings from IndexedDB (fast, single TX)
+ * 2. applyIdentity() — swap manifest link, title, apple meta, theme-color
+ *    This must happen BEFORE any rendering so the browser sees the correct
+ *    PWA identity if it shows an install prompt during this session.
+ * 3a. mask.enabled → mount MaskManager (disguise UI)
+ * 3b. else         → mount normal app shell + router
  * 4. Register Service Worker (non-blocking)
  */
 
 import { getDB } from './core/db/index.js'
 import { settingsDB } from './core/db/settings.js'
+import { applyIdentity } from './core/manifest.js'
 import { events } from './ui/events.js'
-import { router } from './ui/router.ts'
+import { router } from './ui/router.js'
 import { toast } from './ui/toast.js'
+import type { MaskType } from './types/index.js'
 
-// Feature modules — lazy loaded on route enter
 const loadCapture  = () => import('./features/capture/index.js')
 const loadGallery  = () => import('./features/gallery/index.js')
 const loadSettings = () => import('./features/settings/index.js')
 const loadMask     = () => import('./features/mask/index.js')
 
 async function bootstrap(): Promise<void> {
-  // 1. Warm up DB connection
+  // 1. Warm DB connection
   await getDB()
 
-  // 2. Check mask
-  const maskEnabled = await settingsDB.getSetting('mask.enabled')
+  // 2. Read mask settings + apply PWA identity atomically
+  const [maskEnabled, maskType] = await Promise.all([
+    settingsDB.getSetting('mask.enabled'),
+    settingsDB.getSetting('mask.type'),
+  ])
 
+  applyIdentity(maskEnabled, maskType as MaskType)
+
+  // 3. Mount appropriate UI
   if (maskEnabled) {
-    // 3a. Show mask — defer all other loading
     const { MaskManager } = await loadMask()
     const mask = new MaskManager()
     mask.mount(document.getElementById('app')!)
 
-    // On unlock: unmount mask, start normal app
     events.once('mask:unlock', () => {
       mask.unmount()
       startApp()
     })
   } else {
-    // 3b. Start normal app immediately
     startApp()
   }
 
-  // 4. Register SW (non-blocking)
+  // 4. Service Worker (non-blocking)
   registerSW()
 }
 
 function startApp(): void {
   const appEl = document.getElementById('app')!
 
-  // Create main layout
   appEl.innerHTML = `
     <div id="screen-container"></div>
     <nav id="bottom-nav">
@@ -79,16 +84,13 @@ function startApp(): void {
     </nav>
   `
 
-  // Wire bottom nav
-  const nav = document.getElementById('bottom-nav')!
-  nav.addEventListener('click', (e) => {
-    const btn = (e.target as Element).closest('[data-route]') as HTMLElement | null
+  document.getElementById('bottom-nav')!.addEventListener('click', e => {
+    const btn = (e.target as Element).closest<HTMLElement>('[data-route]')
     if (btn) router.navigate(btn.dataset.route!)
   })
 
   const screenEl = document.getElementById('screen-container')!
 
-  // Register routes
   router.on('/capture', async () => {
     setActiveNav('capture')
     const { CaptureScreen } = await loadCapture()
@@ -119,16 +121,13 @@ function startApp(): void {
   })
 
   router.start()
-
-  // Handle mask re-lock on background
   setupAutoLock()
 }
 
-interface Screen {
-  mount(el: HTMLElement): void
-  unmount?(): void
-}
-
+// ---------------------------------------------------------------------------
+// Screen mounting
+// ---------------------------------------------------------------------------
+interface Screen { mount(el: HTMLElement): void; unmount?(): void }
 let currentScreen: Screen | null = null
 
 function mountScreen(container: HTMLElement, screen: Screen): void {
@@ -139,54 +138,69 @@ function mountScreen(container: HTMLElement, screen: Screen): void {
 }
 
 function setActiveNav(route: string): void {
-  document.querySelectorAll('#bottom-nav button').forEach(btn => {
-    const el = btn as HTMLElement
-    el.classList.toggle('active', el.dataset.route?.includes(route) ?? false)
+  document.querySelectorAll<HTMLElement>('#bottom-nav button').forEach(btn => {
+    btn.classList.toggle('active', (btn.dataset.route ?? '').includes(route))
   })
 }
 
+// ---------------------------------------------------------------------------
+// Auto-lock (re-show mask after 5 min in background)
+// ---------------------------------------------------------------------------
 let lastUnlockTime = 0
+const LOCK_TIMEOUT = 5 * 60 * 1000
 
 function setupAutoLock(): void {
   events.on('mask:unlock', () => { lastUnlockTime = Date.now() })
 
   document.addEventListener('visibilitychange', async () => {
     if (document.hidden) return
-
     const maskEnabled = await settingsDB.getSetting('mask.enabled')
     if (!maskEnabled) return
-
-    const elapsed = Date.now() - lastUnlockTime
-    const LOCK_TIMEOUT_MS = 5 * 60 * 1000   // 5 minutes
-
-    if (elapsed > LOCK_TIMEOUT_MS) {
-      window.location.reload()   // Cleanest way: reload triggers mask on next bootstrap
+    if (Date.now() - lastUnlockTime > LOCK_TIMEOUT) {
+      window.location.reload()
     }
   })
 }
 
+// ---------------------------------------------------------------------------
+// Service Worker registration
+// ---------------------------------------------------------------------------
 function registerSW(): void {
-  if ('serviceWorker' in navigator) {
-    import('virtual:pwa-register').then(({ registerSW }) => {
-      registerSW({
-        onNeedRefresh() {
-          toast('Update available', 'info', {
-            duration: 0,
-            action: {
-              label: 'Update',
-              onClick: () => window.location.reload(),
+  if (!('serviceWorker' in navigator)) return
+
+  import('virtual:pwa-register').then(({ registerSW }) => {
+    registerSW({
+      onNeedRefresh() {
+        toast('Update available', 'info', {
+          duration: 0,
+          action: {
+            label: 'Update now',
+            onClick: () => {
+              // Tell SW to skip waiting, then reload
+              navigator.serviceWorker.ready.then(reg => {
+                reg.active?.postMessage({ type: 'SKIP_WAITING' })
+              })
+              window.location.reload()
             },
-          })
-        },
-      })
-    }).catch(() => {
-      // SW registration not critical — ignore in dev mode
+          },
+        })
+      },
     })
-  }
+  }).catch(() => { /* dev mode — no SW */ })
 }
 
-// Bootstrap
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
 bootstrap().catch(err => {
   console.error('[GeoXam] Bootstrap failed:', err)
-  document.body.innerHTML = '<p style="color:red;padding:20px;">Failed to initialize app. Please reload.</p>'
+  document.body.innerHTML = `
+    <div style="padding:32px;color:#ff3b30;font-family:monospace;font-size:14px;">
+      <p>Failed to start GeoXam.</p>
+      <p style="color:#888;margin-top:8px;">${err?.message ?? err}</p>
+      <button onclick="location.reload()" style="margin-top:16px;padding:10px 20px;background:#ff3b30;color:#fff;border:none;border-radius:8px;font-size:14px;">
+        Reload
+      </button>
+    </div>
+  `
 })

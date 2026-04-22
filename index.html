@@ -4,24 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 
-    <!-- theme-color updated dynamically by applyIdentity() -->
+    <!-- Dynamically updated by applyIdentity() before first render -->
     <meta name="theme-color" content="#000000" />
-
-    <!-- PWA / iOS — values updated dynamically by applyIdentity() -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="GeoXam" />
 
-    <!-- manifest link — href swapped dynamically by applyIdentity() -->
+    <!-- href updated by applyIdentity() -->
     <link rel="manifest" href="/manifest.json" />
 
-    <!-- favicon -->
+    <!-- Vite rewrites these paths with the correct base at build time -->
     <link rel="apple-touch-icon" href="/icons/icon-real-192.png" />
-    <link rel="icon" type="image/png" href="/icons/icon-real-96.png" />
+    <link rel="icon" type="image/png" sizes="96x96" href="/icons/icon-real-96.png" />
 
     <meta name="format-detection" content="telephone=no" />
+    <meta name="mobile-web-app-capable" content="yes" />
 
-    <!-- title updated dynamically by applyIdentity() -->
     <title>GeoXam</title>
   </head>
   <body>

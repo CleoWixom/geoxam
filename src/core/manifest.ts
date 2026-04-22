@@ -1,61 +1,65 @@
+/// <reference types="vite/client" />
 /**
  * ManifestManager
  *
  * Applies PWA identity disguise BEFORE any UI mounts.
- * Swaps: <link rel="manifest">, <title>, apple meta tags, theme-color.
+ * Reads BASE from the <base> tag or import.meta.env.BASE_URL injected by Vite.
  *
- * Service Worker intercepts GET /manifest.json → reads cached identity →
- * returns the active manifest. This ensures the install prompt (A2HS) always
- * shows the correct name and icon, even while the app is already installed.
+ * Swaps: <link rel="manifest">, <title>, apple meta tags, theme-color,
+ *        apple-touch-icon, favicon.
  */
 
 import type { MaskType } from '../types/index.js'
 
+// Vite injects BASE_URL at build time from vite.config base option
+// e.g. '/geoxam/' on GitHub Pages, '/' on custom domain
+const BASE: string = (import.meta as { env: { BASE_URL: string } }).env.BASE_URL ?? '/'
+
 export interface ManifestIdentity {
-  /** href of the manifest file to activate */
-  manifestHref: string
-  /** Browser tab / window title */
-  title: string
-  /** Short name for apple-mobile-web-app-title */
-  appleTitle: string
-  /** theme-color meta */
-  themeColor: string
+  manifestHref:  string
+  title:         string
+  appleTitle:    string
+  themeColor:    string
+  touchIcon:     string
 }
 
 const IDENTITIES: Record<'real' | MaskType, ManifestIdentity> = {
   real: {
-    manifestHref: '/manifest.json',
+    manifestHref: `${BASE}manifest.json`,
     title:        'GeoXam',
     appleTitle:   'GeoXam',
     themeColor:   '#000000',
+    touchIcon:    `${BASE}icons/icon-real-192.png`,
   },
   calculator: {
-    manifestHref: '/manifest-calculator.json',
+    manifestHref: `${BASE}manifest-calculator.json`,
     title:        'Calculator',
     appleTitle:   'Calculator',
     themeColor:   '#1c1c1e',
+    touchIcon:    `${BASE}icons/icon-calculator-192.png`,
   },
   calendar: {
-    manifestHref: '/manifest-calendar.json',
+    manifestHref: `${BASE}manifest-calendar.json`,
     title:        'Calendar',
     appleTitle:   'Calendar',
     themeColor:   '#ff3b30',
+    touchIcon:    `${BASE}icons/icon-calendar-192.png`,
   },
   notepad: {
-    manifestHref: '/manifest-notepad.json',
+    manifestHref: `${BASE}manifest-notepad.json`,
     title:        'Notes',
     appleTitle:   'Notes',
     themeColor:   '#fff8e1',
+    touchIcon:    `${BASE}icons/icon-notepad-192.png`,
   },
 }
 
 /**
  * Apply the PWA identity to the document.
- * Must be called synchronously in bootstrap before any rendering.
+ * Call synchronously in bootstrap before any rendering.
  */
 export function applyIdentity(maskEnabled: boolean, maskType: MaskType): void {
-  const key   = maskEnabled ? maskType : 'real'
-  const ident = IDENTITIES[key]
+  const ident = IDENTITIES[maskEnabled ? maskType : 'real']
 
   // 1. <link rel="manifest">
   let link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')
@@ -69,46 +73,42 @@ export function applyIdentity(maskEnabled: boolean, maskType: MaskType): void {
   // 2. <title>
   document.title = ident.title
 
-  // 3. apple-mobile-web-app-title
+  // 3. Apple meta tags
   setMeta('apple-mobile-web-app-title', ident.appleTitle)
+  setMeta('theme-color', ident.themeColor)
 
-  // 4. theme-color
-  setMeta('theme-color', ident.themeColor, 'name')
+  // 4. Apple touch icon
+  let touchLink = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]')
+  if (!touchLink) {
+    touchLink = document.createElement('link')
+    touchLink.rel = 'apple-touch-icon'
+    document.head.appendChild(touchLink)
+  }
+  touchLink.href = ident.touchIcon
 
-  // 5. Notify Service Worker to cache the active manifest
-  //    SW reads this and intercepts /manifest.json requests
+  // 5. Notify SW to serve the correct manifest for /manifest.json requests
   notifySW(ident.manifestHref)
 }
 
-/** Returns the identity config for the given mask state */
 export function getIdentity(maskEnabled: boolean, maskType: MaskType): ManifestIdentity {
   return IDENTITIES[maskEnabled ? maskType : 'real']
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
-function setMeta(name: string, content: string, attr: 'name' | 'property' = 'name'): void {
-  let el = document.querySelector<HTMLMetaElement>(`meta[${attr}="${name}"]`)
+function setMeta(name: string, content: string): void {
+  let el = document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)
   if (!el) {
     el = document.createElement('meta')
-    el.setAttribute(attr, name)
+    el.setAttribute('name', name)
     document.head.appendChild(el)
   }
   el.content = content
 }
 
-/**
- * Tell the active Service Worker which manifest to serve for /manifest.json.
- * SW stores this in its own cache so it persists across page loads.
- */
 function notifySW(manifestHref: string): void {
   if (!('serviceWorker' in navigator)) return
   navigator.serviceWorker.ready.then(reg => {
-    reg.active?.postMessage({
-      type: 'SET_ACTIVE_MANIFEST',
-      href: manifestHref,
-    })
-  }).catch(() => { /* SW not ready yet — harmless */ })
+    reg.active?.postMessage({ type: 'SET_ACTIVE_MANIFEST', href: manifestHref })
+  }).catch(() => {})
 }

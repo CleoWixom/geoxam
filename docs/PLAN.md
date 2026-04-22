@@ -109,7 +109,7 @@ Phase 2  Capture screen (viewfinder + capture flow)   ✅ Done
 Phase 3  Gallery (folders, browser, viewer)           ✅ Done
 Phase 4  Settings (all config panels)                 ✅ Done
 Phase 5  Mask system (3 disguises + protection)       ✅ Done
-Phase 6  PWA, polish, tests, docs                     🔄 In progress
+Phase 6  PWA, polish, tests, docs                     ✅ Done
 ```
 
 ---
@@ -818,8 +818,8 @@ The `[skip ci]` prevents an infinite loop.
 | M3 | Gallery fully functional | ✅ |
 | M4 | Settings fully functional | ✅ |
 | M5 | All 3 masks + protection working | ✅ |
-| M6 | PWA installable, offline works, all tests green | 🔄 |
-| M7 | v1.0.0 release | [ ] |
+| M6 | PWA installable, offline works, all tests green | ✅ |
+| M7 | v1.0.0 release | 🔜 |
 
 ---
 

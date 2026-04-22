@@ -1,99 +1,101 @@
 /**
  * GeoXam Service Worker
  *
- * Extends Workbox (injected by vite-plugin-pwa) with:
- *   1. /manifest.json interception — serves the active disguise manifest
- *   2. Offline fallback for navigation requests
+ * Workbox injectManifest — precache list injected by vite-plugin-pwa at build.
  *
- * Message protocol from main thread:
- *   { type: 'SET_ACTIVE_MANIFEST', href: '/manifest-calculator.json' }
+ * Custom logic:
+ *   1. /manifest.json interception → serves active disguise manifest
+ *   2. Navigation fallback → index.html (SPA with hash routing)
+ *
+ * Messages from main thread:
+ *   { type: 'SET_ACTIVE_MANIFEST', href: string }
  *   { type: 'SKIP_WAITING' }
  */
 
 /// <reference lib="WebWorker" />
 declare const self: ServiceWorkerGlobalScope
 
-// Workbox injects its precache manifest here at build time
-import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching'
+import { precacheAndRoute, cleanupOutdatedCaches, createHandlerBoundToURL } from 'workbox-precaching'
 import { registerRoute, NavigationRoute } from 'workbox-routing'
-import { CacheFirst } from 'workbox-strategies'
 
-// ─── Precache all static assets (injected by vite-plugin-pwa) ────────────────
 // @ts-ignore __WB_MANIFEST injected at build time by vite-plugin-pwa
 precacheAndRoute(self.__WB_MANIFEST ?? [])
 cleanupOutdatedCaches()
 
-// ─── Active manifest state ────────────────────────────────────────────────────
+// ─── State: which manifest to serve ──────────────────────────────────────────
 const MANIFEST_CACHE = 'geoxam-manifest-v1'
-let activeManifestHref = '/manifest.json'   // default = real app
+let activeManifestHref = ''   // populated on activate from cache, or on first message
 
-// ─── Message handler ──────────────────────────────────────────────────────────
+// ─── Messages ─────────────────────────────────────────────────────────────────
 self.addEventListener('message', (event: ExtendableMessageEvent) => {
-  const data = event.data as { type: string; href?: string }
+  const data = event.data as { type: string; href?: string } | null
+  if (!data) return
 
-  if (data?.type === 'SKIP_WAITING') {
+  if (data.type === 'SKIP_WAITING') {
     self.skipWaiting()
     return
   }
 
-  if (data?.type === 'SET_ACTIVE_MANIFEST' && data.href) {
+  if (data.type === 'SET_ACTIVE_MANIFEST' && data.href) {
     activeManifestHref = data.href
-    // Persist to cache so next SW activation remembers the choice
-    caches.open(MANIFEST_CACHE).then(cache => {
-      cache.put('__active_manifest__', new Response(data.href!, {
-        headers: { 'Content-Type': 'text/plain' }
-      }))
-    })
+    caches.open(MANIFEST_CACHE).then(cache =>
+      cache.put('__active__', new Response(data.href!, { headers: { 'Content-Type': 'text/plain' } }))
+    )
   }
 })
 
-// ─── Restore active manifest on SW activation ─────────────────────────────────
+// ─── Restore on activate ──────────────────────────────────────────────────────
 self.addEventListener('activate', (event: ExtendableEvent) => {
   event.waitUntil(
     caches.open(MANIFEST_CACHE).then(async cache => {
-      const stored = await cache.match('__active_manifest__')
+      const stored = await cache.match('__active__')
       if (stored) activeManifestHref = await stored.text()
     })
   )
 })
 
-// ─── Intercept /manifest.json ─────────────────────────────────────────────────
-registerRoute(
-  ({ url }) => url.pathname === '/manifest.json',
-  async ({ request }) => {
-    // Serve the active manifest file (real or disguise)
-    const targetUrl = request.url.replace('/manifest.json', activeManifestHref)
-
-    // Try cache first (CacheFirst for manifests — they're versioned via filename)
-    const cache = await caches.open('geoxam-manifests-v1')
-    const cached = await cache.match(targetUrl)
-    if (cached) return cached
-
-    // Fetch and cache
-    const response = await fetch(targetUrl)
-    if (response.ok) cache.put(targetUrl, response.clone())
-    return response
-  }
-)
-
-// ─── Cache all manifest variants upfront ─────────────────────────────────────
+// ─── Cache all manifest variants on install ───────────────────────────────────
 self.addEventListener('install', (event: ExtendableEvent) => {
+  // Derive base from SW location: e.g. /geoxam/sw.js → base = /geoxam/
+  const swUrl = new URL(self.location.href)
+  const base  = swUrl.pathname.replace(/sw\.js$/, '')
+
   event.waitUntil(
     caches.open('geoxam-manifests-v1').then(cache =>
       cache.addAll([
-        '/manifest.json',
-        '/manifest-calculator.json',
-        '/manifest-calendar.json',
-        '/manifest-notepad.json',
-      ])
+        `${base}manifest.json`,
+        `${base}manifest-calculator.json`,
+        `${base}manifest-calendar.json`,
+        `${base}manifest-notepad.json`,
+      ]).catch(() => { /* manifests not yet available on first install */ })
     )
   )
 })
 
-// ─── Navigation fallback (SPA) ────────────────────────────────────────────────
+// ─── Intercept /manifest.json ─────────────────────────────────────────────────
 registerRoute(
-  new NavigationRoute(
-    new CacheFirst({ cacheName: 'geoxam-navigation' }),
-    { denylist: [/\/api\//] }
-  )
+  ({ url }) => url.pathname.endsWith('/manifest.json') || url.pathname.endsWith('/manifest.webmanifest'),
+  async ({ request }) => {
+    if (!activeManifestHref) return fetch(request)
+
+    // Build absolute target URL
+    const base   = new URL(self.location.href)
+    const target = new URL(activeManifestHref, base.origin)
+
+    const cache  = await caches.open('geoxam-manifests-v1')
+    const cached = await cache.match(target.href)
+    if (cached) return cached
+
+    const response = await fetch(target.href)
+    if (response.ok) cache.put(target.href, response.clone())
+    return response
+  }
+)
+
+// ─── SPA navigation fallback → index.html ─────────────────────────────────────
+// Hash routing: all navigation requests should serve index.html
+// Derive path from SW location (respects base subdirectory)
+const BASE_PATH = new URL(self.location.href).pathname.replace(/sw\.js$/, '')
+registerRoute(
+  new NavigationRoute(createHandlerBoundToURL(`${BASE_PATH}index.html`))
 )

@@ -1,6 +1,6 @@
 {
   "name": "geoxam",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "description": "Geo-tagged photo capture app with disguise mode",
   "type": "module",

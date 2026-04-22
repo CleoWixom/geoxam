@@ -4,7 +4,7 @@ import type { Photo, NewPhoto, StorageStats } from '../../types/index.js'
 class PhotosDB {
   async addPhoto(data: NewPhoto): Promise<number> {
     const db = await getDB()
-    return db.add('photos', data as Photo)
+    return (db.add('photos', data as Photo) as unknown) as Promise<number>
   }
 
   async getPhoto(id: number): Promise<Photo | undefined> {

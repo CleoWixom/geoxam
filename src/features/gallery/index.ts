@@ -76,7 +76,7 @@ export class GalleryRoot {
   }
 
   private folderCard(
-    _id: number | null, name: string, count: number,
+    _folderId: number | null, name: string, count: number,
     cover: Photo | null, route: string
   ): HTMLElement {
     const card = document.createElement('div')
@@ -256,7 +256,7 @@ export class FolderView {
 // =============================================================================
 export class PhotoViewer {
   private readonly photoId: number
-  private container: HTMLElement | null = null
+  private _container: HTMLElement | null = null
   private blobUrl: string | null = null
 
   constructor(photoId: number) {
@@ -264,7 +264,7 @@ export class PhotoViewer {
   }
 
   async mount(container: HTMLElement): Promise<void> {
-    this.container = container
+    this._container = container
 
     const photo = await photosDB.getPhoto(this.photoId)
     if (!photo) {
@@ -360,6 +360,7 @@ export class PhotoViewer {
 
   unmount(): void {
     if (this.blobUrl) { URL.revokeObjectURL(this.blobUrl); this.blobUrl = null }
+    revokeBlobsIn(this._container)
   }
 }
 

@@ -16,10 +16,10 @@ declare const self: ServiceWorkerGlobalScope
 // Workbox injects its precache manifest here at build time
 import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching'
 import { registerRoute, NavigationRoute } from 'workbox-routing'
-import { CacheFirst, NetworkFirst } from 'workbox-strategies'
+import { CacheFirst } from 'workbox-strategies'
 
 // ─── Precache all static assets (injected by vite-plugin-pwa) ────────────────
-// @ts-expect-error __WB_MANIFEST injected at build time
+// @ts-ignore __WB_MANIFEST injected at build time by vite-plugin-pwa
 precacheAndRoute(self.__WB_MANIFEST ?? [])
 cleanupOutdatedCaches()
 

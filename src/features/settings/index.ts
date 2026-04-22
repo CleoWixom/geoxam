@@ -13,11 +13,9 @@ import { drawCrosshair } from '../../core/canvas/crosshair.js'
 import type { SettingsMap, ResolutionPreset, CrosshairStyle, MaskType, MaskProtection } from '../../types/index.js'
 
 export class SettingsScreen {
-  private container: HTMLElement | null = null
   private settings: SettingsMap | null = null
 
   async mount(container: HTMLElement): Promise<void> {
-    this.container = container
     this.settings = await settingsDB.getAllSettings()
 
     container.innerHTML = /* html */`

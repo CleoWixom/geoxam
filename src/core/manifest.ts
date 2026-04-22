@@ -9,7 +9,7 @@
  * shows the correct name and icon, even while the app is already installed.
  */
 
-import type { MaskType } from '../../types/index.js'
+import type { MaskType } from '../types/index.js'
 
 export interface ManifestIdentity {
   /** href of the manifest file to activate */

@@ -280,7 +280,7 @@ export class CaptureScreen {
   // ---------------------------------------------------------------------------
   private subscribeEvents(): void {
     this.unsubs.push(
-      events.on('geo:status', s => this.onGeoStatus(s)),
+      events.on('geo:status', (s: GeoStatus) => this.onGeoStatus(s)),
       events.on('geo:fix',    f => this.onGeoFix(f)),
       events.on('settings:changed', ({ key }) => {
         if (key.startsWith('crosshair.') || key.startsWith('photo.')) {

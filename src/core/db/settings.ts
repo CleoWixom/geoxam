@@ -54,7 +54,7 @@ class SettingsService {
     const result = { ...DEFAULTS } as SettingsMap
     for (const row of all) {
       if (row.key in result) {
-        ;(result as Record<string, unknown>)[row.key] = row.value
+        ;(result as unknown as Record<string, unknown>)[row.key] = row.value
       }
     }
 
@@ -74,7 +74,7 @@ class SettingsService {
     await db.put('settings', { key, value })
 
     if (this.cache) {
-      ;(this.cache as Record<string, unknown>)[key] = value
+      ;(this.cache as unknown as Record<string, unknown>)[key] = value
     }
 
     events.emit('settings:changed', { key, value })

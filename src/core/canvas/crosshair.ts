@@ -1,4 +1,4 @@
-import type { CrosshairConfig, CrosshairSize, CrosshairStyle } from '../../types/index.js'
+import type { CrosshairConfig, CrosshairSize } from '../../types/index.js'
 
 // =============================================================================
 // Crosshair dimensions by size

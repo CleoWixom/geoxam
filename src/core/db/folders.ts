@@ -9,7 +9,7 @@ class FoldersDB {
       coverPhotoId: null,
     }
     const db = await getDB()
-    return db.add('folders', data as Folder)
+    return (db.add('folders', data as Folder) as unknown) as Promise<number>
   }
 
   async getFolder(id: number): Promise<Folder | undefined> {

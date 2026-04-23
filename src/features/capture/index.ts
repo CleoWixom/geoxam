@@ -170,6 +170,16 @@ export class CaptureScreen {
 
     try {
       const geoFix = geoService.getLatest()
+
+      // Warn if storage >80% full (non-blocking)
+      const stats = await photosDB.getStorageStats()
+      if (stats.estimate && stats.estimate.quota > 0) {
+        const pct = stats.estimate.usage / stats.estimate.quota
+        if (pct > 0.9) {
+          toast('Storage almost full — manage in Settings', 'warning', { duration: 5000 })
+        }
+      }
+
       const description = await this.promptDescription()
       const frame = await createImageBitmap(this.video)
       const result = await compositePhoto(frame, geoFix, description, this.settings!)

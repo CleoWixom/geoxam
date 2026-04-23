@@ -155,3 +155,17 @@ Build output at `dist/`, all assets prefixed with `/geoxam/` base path.
 | Exit | Tap Cancel or deselect all | Normal mode restored |
 | Sort menu | Tap Sort ▾ | Sheet with 4 options |
 | Sort persists | Change sort, scroll | Order maintained |
+
+---
+
+## E2E Test Coverage (Playwright — Chromium)
+
+| File | Suites | Tests | What |
+|---|---|---|---|
+| `navigation.spec.ts` | Router | 7 | Hash routing, tab nav, back button |
+| `gallery.spec.ts` | Gallery root, Folder view | 12 | Folder CRUD, sort, navigation |
+| `settings.spec.ts` | Rendering, persistence, identity | 10 | All panels, DB persist, title swap |
+| `mask.spec.ts` | Calculator, Calendar, Notepad, PIN | 20 | All unlocks, PIN correct/wrong/backspace |
+
+Run: `npm run test:e2e`
+Requires: `npm run build && npm run preview` running on port 4173

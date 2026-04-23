@@ -17,6 +17,7 @@ import { applyIdentity } from './core/manifest.js'
 import { events } from './ui/events.js'
 import { router } from './ui/router.js'
 import { toast } from './ui/toast.js'
+import { maybeShowIOSPrompt, initOfflineDetection } from './ui/pwa-prompt.js'
 import type { MaskType } from './types/index.js'
 
 const loadCapture  = () => import('./features/capture/index.js')
@@ -122,6 +123,10 @@ function startApp(): void {
 
   router.start()
   setupAutoLock()
+
+  // PWA helpers
+  initOfflineDetection()
+  setTimeout(maybeShowIOSPrompt, 3000)  // delay so it doesn't compete with first render
 }
 
 // ---------------------------------------------------------------------------

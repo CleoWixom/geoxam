@@ -819,7 +819,7 @@ The `[skip ci]` prevents an infinite loop.
 | M4 | Settings fully functional | ✅ |
 | M5 | All 3 masks + protection working | ✅ |
 | M6 | PWA installable, offline works, all tests green | ✅ |
-| M7 | v1.0.0 release | 🔜 |
+| M7 | v1.0.0 release | 🔜 — pending manual device test |
 
 ---
 

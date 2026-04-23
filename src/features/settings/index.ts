@@ -390,6 +390,14 @@ export class SettingsScreen {
         await settingsDB.setSetting('mask.codeHash', await hashCode(pin))
         toast('PIN saved', 'success')
       }
+      if (prot === 'pattern') {
+        showPatternSetup(async (positions) => {
+          const { hashPattern } = await import('../../core/crypto/index.js')
+          const h = await hashPattern(positions)
+          await settingsDB.setSetting('mask.codeHash', h)
+          toast('Pattern saved', 'success')
+        })
+      }
     })
     sec.appendChild(setCodeBtn)
 
@@ -488,4 +496,131 @@ function positionPicker(
     grid.appendChild(btn)
   }
   return grid
+}
+
+// =============================================================================
+// Pattern setup overlay (settings)
+// =============================================================================
+function showPatternSetup(onSave: (positions: number[]) => void): void {
+  const overlay = document.createElement('div')
+  overlay.style.cssText =
+    'position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.85);' +
+    'backdrop-filter:blur(20px);display:flex;flex-direction:column;' +
+    'align-items:center;justify-content:center;gap:24px;padding:32px;'
+
+  overlay.innerHTML = /* html */`
+    <p style="color:#fff;font-size:17px;font-weight:600;">Draw a new pattern</p>
+    <p style="color:rgba(255,255,255,0.5);font-size:13px;text-align:center;">
+      Connect at least 4 dots. Draw it twice to confirm.
+    </p>
+    <canvas id="setup-canvas" width="280" height="280"
+      style="display:block;border-radius:16px;background:rgba(255,255,255,0.04);touch-action:none;"></canvas>
+    <p id="setup-status" style="color:rgba(255,255,255,0.6);font-size:14px;min-height:20px;"></p>
+    <div style="display:flex;gap:12px;">
+      <button id="setup-cancel" style="padding:12px 28px;border-radius:12px;background:rgba(255,255,255,0.1);
+        color:#fff;font-size:15px;">Cancel</button>
+    </div>
+  `
+
+  document.body.appendChild(overlay)
+
+  const canvas   = overlay.querySelector<HTMLCanvasElement>('#setup-canvas')!
+  const statusEl = overlay.querySelector<HTMLElement>('#setup-status')!
+  const ctx      = canvas.getContext('2d')!
+
+  overlay.querySelector('#setup-cancel')!.addEventListener('click', () => overlay.remove())
+
+  let phase: 'first' | 'confirm' = 'first'
+  let firstPattern: number[] = []
+  let sequence: number[] = []
+  let drawing = false
+  let cursor  = { x: 0, y: 0 }
+
+  const W = canvas.width, H = canvas.height
+  const COLS = 3, ROWS = 3
+  const DOT_R = 14, HIT_R = 36
+
+  const dots: Array<{x:number;y:number}> = []
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      dots.push({ x: W*(c+1)/(COLS+1), y: H*(r+1)/(ROWS+1) })
+
+  function hitDot(px: number, py: number): number {
+    return dots.findIndex((d,i) =>
+      !sequence.includes(i) && Math.hypot(px-d.x, py-d.y) < HIT_R)
+  }
+
+  function draw(color = '#0a84ff'): void {
+    ctx.clearRect(0,0,W,H)
+    ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.lineCap = 'round'
+    if (sequence.length > 1) {
+      ctx.beginPath()
+      ctx.moveTo(dots[sequence[0]].x, dots[sequence[0]].y)
+      for (let i = 1; i < sequence.length; i++) ctx.lineTo(dots[sequence[i]].x, dots[sequence[i]].y)
+      if (drawing) ctx.lineTo(cursor.x, cursor.y)
+      ctx.stroke()
+    }
+    for (let i = 0; i < dots.length; i++) {
+      const active = sequence.includes(i)
+      ctx.beginPath(); ctx.arc(dots[i].x, dots[i].y, DOT_R, 0, Math.PI*2)
+      ctx.fillStyle = active ? color : 'rgba(255,255,255,0.25)'; ctx.fill()
+      if (active) {
+        ctx.beginPath(); ctx.arc(dots[i].x, dots[i].y, DOT_R*.45, 0, Math.PI*2)
+        ctx.fillStyle='#fff'; ctx.fill()
+      }
+    }
+  }
+
+  function getPos(e: PointerEvent): {x:number;y:number} {
+    const r = canvas.getBoundingClientRect()
+    return { x:(e.clientX-r.left)*(W/r.width), y:(e.clientY-r.top)*(H/r.height) }
+  }
+
+  canvas.addEventListener('pointerdown', e => {
+    drawing = true; sequence = []
+    const pos = getPos(e); cursor = pos
+    const hit = hitDot(pos.x, pos.y); if (hit !== -1) sequence.push(hit)
+    draw()
+  })
+  canvas.addEventListener('pointermove', e => {
+    if (!drawing) return
+    const pos = getPos(e); cursor = pos
+    const hit = hitDot(pos.x, pos.y); if (hit !== -1) sequence.push(hit)
+    draw()
+  })
+  canvas.addEventListener('pointerup', () => {
+    if (!drawing) return
+    drawing = false; draw()
+
+    if (sequence.length < 4) {
+      statusEl.style.color = '#ff3b30'
+      statusEl.textContent = 'Connect at least 4 dots'
+      setTimeout(() => { sequence = []; draw() }, 800)
+      return
+    }
+
+    if (phase === 'first') {
+      firstPattern = [...sequence]
+      statusEl.style.color = 'rgba(255,255,255,0.6)'
+      statusEl.textContent = 'Draw the same pattern again to confirm'
+      phase = 'confirm'
+      setTimeout(() => { sequence = []; draw() }, 600)
+    } else {
+      // Verify match
+      if (sequence.join('-') === firstPattern.join('-')) {
+        draw('#34c759')
+        setTimeout(() => { overlay.remove(); onSave(firstPattern) }, 500)
+      } else {
+        draw('#ff3b30')
+        statusEl.style.color = '#ff3b30'
+        statusEl.textContent = "Patterns don't match — try again"
+        phase = 'first'; firstPattern = []
+        setTimeout(() => { sequence = []; draw() }, 800)
+      }
+    }
+  })
+
+  statusEl.style.color = 'rgba(255,255,255,0.6)'
+  statusEl.textContent = 'Draw your pattern'
+  draw()
 }

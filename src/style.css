@@ -1201,3 +1201,62 @@ input, textarea {
   overflow: hidden;
   clip: rect(0,0,0,0);
 }
+
+/* =============================================================================
+   Gallery — Multi-select + sort (Phase 6 additions)
+   ============================================================================= */
+
+/* Check overlay on photo cells */
+.photo-check {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: #fff;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.photo-grid.multi-select .photo-check { display: flex; }
+
+.photo-cell.selected .photo-check {
+  background: rgba(10,132,255,0.55);
+}
+
+.photo-cell.selected::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 3px solid var(--clr-info);
+  pointer-events: none;
+}
+
+/* Bulk action bar */
+.bulk-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 12px 16px calc(12px + var(--safe-bottom));
+  background: rgba(18,18,18,0.96);
+  backdrop-filter: blur(16px);
+  border-top: 1px solid var(--clr-border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 20;
+}
+
+.bulk-bar span {
+  flex: 1;
+  font-size: 14px;
+  color: var(--clr-text-2);
+}
+
+/* Pattern lock grid */
+#pattern-canvas {
+  border-radius: 16px;
+  background: rgba(255,255,255,0.04);
+}

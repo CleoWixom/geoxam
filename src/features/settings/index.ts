@@ -8,6 +8,7 @@ import { photosDB } from '../../core/db/photos.js'
 import { router } from '../../ui/router.js'
 import { toast } from '../../ui/toast.js'
 import { hashCode } from '../../core/crypto/index.js'
+import { applyIdentity } from '../../core/manifest.js'
 import { drawOverlay } from '../../core/canvas/overlay.js'
 import { drawCrosshair } from '../../core/canvas/crosshair.js'
 import type { SettingsMap, ResolutionPreset, CrosshairStyle, MaskType, MaskProtection } from '../../types/index.js'
@@ -346,9 +347,11 @@ export class SettingsScreen {
     const s = this.settings!
     const sec = section('🕵️ Disguise')
 
-    sec.appendChild(toggleRow('Enable disguise mode', s['mask.enabled'], v =>
-      settingsDB.setSetting('mask.enabled', v)
-    ))
+    sec.appendChild(toggleRow('Enable disguise mode', s['mask.enabled'], async v => {
+      await settingsDB.setSetting('mask.enabled', v)
+      const type = await settingsDB.getSetting('mask.type')
+      applyIdentity(v, type)
+    }))
 
     sec.appendChild(label('Disguise as'))
     const typeSeg = segmented<MaskType>(
@@ -356,9 +359,12 @@ export class SettingsScreen {
       { calculator:'🧮 Calc', calendar:'📅 Cal', notepad:'📝 Notes' },
       s['mask.type']
     )
-    typeSeg.addEventListener('change', e =>
-      settingsDB.setSetting('mask.type', (e as CustomEvent<string>).detail as MaskType)
-    )
+    typeSeg.addEventListener('change', async e => {
+      const v = (e as CustomEvent<string>).detail as MaskType
+      await settingsDB.setSetting('mask.type', v)
+      const enabled = await settingsDB.getSetting('mask.enabled')
+      applyIdentity(enabled, v)
+    })
     sec.appendChild(typeSeg)
 
     sec.appendChild(label('Access protection'))

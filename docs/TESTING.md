@@ -131,3 +131,27 @@ Build output at `dist/`, all assets prefixed with `/geoxam/` base path.
 | `npm run dev` | `/` | `/assets/index.js` |
 | `npm run build` (default) | `/geoxam/` | `/geoxam/assets/index.js` |
 | Custom domain | Set `VITE_BASE=/` in CI env | `/assets/index.js` |
+
+---
+
+## Pattern Lock — Manual Testing
+
+| Test | Steps | Expected |
+|---|---|---|
+| Setup pattern | Settings → Protection: Pattern → Set Access Code → draw ≥4 nodes | Saved (hash stored) |
+| Unlock correct | Enable mask → reload → unlock screen → draw same pattern | Unlocks app |
+| Unlock wrong | Draw different pattern | Shake, error count |
+| Lockout | 3 wrong patterns | 30s countdown timer |
+| Min nodes | Draw <4 nodes | "Connect at least 4 dots" |
+
+## Multi-select Gallery — Manual Testing
+
+| Test | Steps | Expected |
+|---|---|---|
+| Enter multi-select | Long-press any photo (500ms) | Checkboxes appear, haptic |
+| Select multiple | Tap photos | Blue border + checkmark |
+| Deselect | Tap selected photo | Deselected |
+| Bulk delete | Select 2+ → Delete | Confirmation, photos removed |
+| Exit | Tap Cancel or deselect all | Normal mode restored |
+| Sort menu | Tap Sort ▾ | Sheet with 4 options |
+| Sort persists | Change sort, scroll | Order maintained |
